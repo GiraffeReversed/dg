@@ -34,6 +34,7 @@ class IdentityBucket {
 
 	public:
 		IdentityBucket(std::set<T>&& ids): identities(std::move(ids)) {}
+		IdentityBucket(std::initializer_list<T> list): identities(list) {}
 };
 
 template <typename T>
@@ -90,6 +91,7 @@ class EqualityBucket {
 
 	public:
 		EqualityBucket(std::map<T, IdentityBucket<T>>&& mp): mapping(std::move(mp)) {}
+		EqualityBucket(std::initializer_list<std::pair<const T, IdentityBucket<T>>> list): mapping(list) {}
 };
 
 template <typename T>
@@ -102,10 +104,7 @@ class RelationsGraph {
 	
 	public:
 	bool add(const T& val) {
-		std::set<T> s = { val };
-		IdentityBucket<T> id(std::move(s));
-		EqualityBucket<T> eq({{val, id}});
-		return mapping.insert({val, eq}).second;
+		return mapping.insert({val, {{ val, { val }}}}).second;
 	}
 
 	public:
