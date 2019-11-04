@@ -35,7 +35,7 @@ class EqualityBucket {
 	SuccessorSet lesserEqual;
 	SuccessorSet lesser;
 
-	bool genericDFSContains(const T& val, bool ignoreLE) {
+	bool genericDFSContains(const T& val, bool ignoreLE) const {
 		std::set<EqualityBucket<T>*> visited;
 		std::stack<std::tuple<EqualityBucket<T>*, typename SuccessorSet::iterator, bool>> stack;
 
@@ -76,12 +76,12 @@ template <typename T>
 class RelationsGraph {
 	std::map<T, EqualityBucket<T>> mapping;
 
-	bool areInGraph(const T& lt, const T& rt) {
+	bool areInGraph(const T& lt, const T& rt) const {
 		return contains(mapping, lt) && contains(mapping, rt);
 	}
 
 	public:
-		bool isIdentical(const T& lt, const T& rt) {
+		bool isIdentical(const T& lt, const T& rt) const {
 
 			if (! areInGraph(lt, rt))
 				return false;
@@ -91,7 +91,7 @@ class RelationsGraph {
 		}
 
 
-		bool isEqual(const T& lt, const T& rt) {
+		bool isEqual(const T& lt, const T& rt) const {
 
 			if (! areInGraph(lt, rt))
 				return false;
@@ -100,7 +100,7 @@ class RelationsGraph {
 			return contains(ltEqBucket, rt);
 		}
 
-		bool isLesser(const T& lt, const T& rt) {
+		bool isLesser(const T& lt, const T& rt) const {
 
 			if (! areInGraph(lt, rt))
 				return false;
@@ -109,7 +109,7 @@ class RelationsGraph {
 			return genericDFSContains(&rtEqBucket, lt, true);
 		}
 
-		bool isLesserEqual(const T& lt, const T& rt) {
+		bool isLesserEqual(const T& lt, const T& rt) const {
 
 			if (! areInGraph(lt, rt))
 				return false;
