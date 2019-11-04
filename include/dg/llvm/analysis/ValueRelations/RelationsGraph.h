@@ -72,10 +72,14 @@ template <typename T>
 class RelationsGraph {
 	std::map<T, EqualityBucket<T>> mapping;
 
+	bool areInGraph(const T& lt, const T& rt) {
+		return contains(mapping, lt) && contains(mapping, rt);
+	}
+
 	public:
 		bool isIdentical(const T& lt, const T& rt) {
 
-			if (!isEqual(lt, rt))
+			if (! areInGraph(lt, rt))
 				return false;
 
 			const auto& ltIdBucket = mapping.at(lt).at(lt);
@@ -85,11 +89,29 @@ class RelationsGraph {
 
 		bool isEqual(const T& lt, const T& rt) {
 
-			if (!contains(mapping, lt) || !contains(mapping, rt))
+			if (! areInGraph(lt, rt))
 				return false;
 
 			const auto& ltEqBucket = mapping.at(lt);
 			return contains(ltEqBucket, rt);
+		}
+
+		bool isLesser(const T& lt, const T& rt) {
+
+			if (! areInGraph(lt, rt))
+				return false;
+
+			const auto& rtEqBucket = mapping.at(rt);
+			return genericDFSContains(&rtEqBucket, lt, true);
+		}
+
+		bool isLesserEqual(const T& lt, const T& rt) {
+
+			if (! areInGraph(lt, rt))
+				return false;
+
+			const auto& rtEqBucket = mapping.at(rt);
+			return genericDFSContains(rtEqBucket, lt, false);
 		}
 };
 
