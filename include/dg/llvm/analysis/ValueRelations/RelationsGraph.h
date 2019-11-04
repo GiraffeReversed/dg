@@ -36,11 +36,11 @@ class EqualityBucket {
 	SuccessorSet lesser;
 
 	bool genericDFSContains(const T& val, bool ignoreLE) {
-		std::set<EqualityBucket<T>> visited;
+		std::set<EqualityBucket<T>*> visited;
 		std::stack<std::tuple<EqualityBucket<T>*, typename SuccessorSet::iterator, bool>> stack;
 
+		visited.insert(&this);
 		stack.emplace(&this, lesserEqual.begin(), ignoreLE);
-
 
 		EqualityBucket<T>* bucketPtr;
 		typename SuccessorSet::iterator it;
@@ -61,7 +61,11 @@ class EqualityBucket {
 				continue;
 
 			stack.push(bucketPtr, ++it, ignore);
-			stack.push(it, it->lesserEqual.begin(), ignore);
+
+			if (! contains(visited, it)) {
+				visited.insert(it);
+				stack.emplace(it, it->lesserEqual.begin(), ignore);
+			}
 		}
 
 		return false;
