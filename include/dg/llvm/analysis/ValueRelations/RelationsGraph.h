@@ -11,6 +11,11 @@ bool contains(const std::map<Key, Val>& map, const Key& key) {
 	return map.find(key) != map.end();
 }
 
+template <typename Val>
+bool contains(const std::set<Val>& set, const Val& val) {
+	return set.find(val) != set.end();
+}
+
 } // namespace
 
 namespace dg {
@@ -33,16 +38,16 @@ class RelationsGraph {
 		bool isIdentical(const T& lt, const T& rt) {
 			if (!isEqual(lt, rt))
 				return false;
-			const auto& ltBucket = mapping.at(lt);
-			const auto& rtBucket = mapping.at(rt);
-			return ltBucket.at(lt) == rtBucket.at(lt);
+			const auto& ltIdBucket = mapping.at(lt).at(lt);
+			return contains(ltIdBucket, rt);
 		}
 
 
 		bool isEqual(const T& lt, const T& rt) {
 			if (!contains(mapping, lt) || !contains(mapping, rt))
 				return false;
-			return mapping.at(lt) == mapping.at(rt);
+			const auto& ltEqBucket = mapping.at(lt);
+			return contains(ltEqBucket, rt);
 		}
 };
 
