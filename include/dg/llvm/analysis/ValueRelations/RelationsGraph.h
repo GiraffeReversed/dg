@@ -28,12 +28,12 @@ class IdentityBucket {
 	template <typename S> friend class EqualityBucket;
 	std::set<T> identities;
 
+	bool contains(const T& val) const {
+		return ::contains<T>(identities, val); 
+	}
+
 	public:
 		IdentityBucket(std::set<T>&& ids): identities(std::move(ids)) {}
-
-		bool contains(const T& val) const {
-			return identities.find(val) != identities.end();
-		}
 };
 
 template <typename T>
@@ -85,7 +85,7 @@ class EqualityBucket {
 	}
 
 	bool contains(const T& val) const {
-		return mapping.find(val) != mapping.end();
+		return ::contains<T>(mapping, val);
 	}
 
 	public:
