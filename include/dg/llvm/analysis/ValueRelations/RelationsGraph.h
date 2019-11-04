@@ -4,6 +4,15 @@
 #include <set>
 #include <map>
 
+namespace {
+
+template <typename Key, typename Val>
+bool contains(const std::map<Key, Val>& map, const Key& key) {
+	return map.find(key) != map.end();
+}
+
+} // namespace
+
 namespace dg {
 
 template <typename T>
@@ -19,6 +28,7 @@ class EqualityBucket {
 template <typename T>
 class RelationsGraph {
 	std::map<T, EqualityBucket<T>> mapping;
+
 };
 
 } // namespace dg
