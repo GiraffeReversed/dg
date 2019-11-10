@@ -23,108 +23,80 @@ bool contains(const std::set<Val>& set, const Val& val) {
 namespace dg {
 
 template <typename T>
-class IdentityBucket {
-	template <typename S> friend class RelationsGraph;
-	template <typename S> friend class EqualityBucket;
-	std::set<T> identities;
-
-	bool contains(const T& val) const {
-		return ::contains<T>(identities, val); 
-	}
-
-	public:
-		IdentityBucket(std::set<T>&& ids): identities(std::move(ids)) {}
-		IdentityBucket(std::initializer_list<T> list): identities(list) {}
-};
-
-template <typename T>
 class EqualityBucket {
-	template <typename S> friend class RelationsGraph;
-	using SuccessorPtr = const EqualityBucket<T>*;
+
+    template <typename S> friend class RelationsGraph;
+
+    using SuccessorPtr = const EqualityBucket<T>*;
 	using SuccessorSet = std::set<SuccessorPtr>;
 	
-	std::map<T, IdentityBucket<T>> mapping;
 	SuccessorSet lesserEqual;
 	SuccessorSet lesser;
 
-	bool genericContains(const T& val, bool ignoreLE) const {
+	bool subtreeContains(const EqualityBucket<T>* needle, bool ignoreLE) const {
+
 		using Frame = std::tuple<SuccessorPtr, typename SuccessorSet::iterator, bool>;
-		std::set<const EqualityBucket<T>*> visited;
+
+        std::set<const EqualityBucket<T>*> visited;
 		std::stack<Frame> stack;
 
 		visited.insert(this);
 		stack.push(Frame(this, lesserEqual.begin(), ignoreLE));
 
 		const EqualityBucket<T>* bucketPtr;
-		typename SuccessorSet::iterator it;
+		typename SuccessorSet::iterator succIt;
 		bool ignore;
 		while (! stack.empty()) {
-			std::tie(bucketPtr, it, ignore) = stack.top();
+			std::tie(bucketPtr, succIt, ignore) = stack.top();
 			stack.pop();
 
-			bool firstPass = it == lesserEqual.begin();
-			if (! ignore && firstPass && bucketPtr->contains(val))
-				return true;
+			if (bucketPtr == needle)
+				return ! ignore;
 
-			if (it == lesserEqual.end()) {
-				it = lesser.begin();
+			if (succIt == lesserEqual.end()) {
+				succIt = lesser.begin();
 				ignore = false;
 			}
 
-			if (it == lesser.end())
+			if (succIt == lesser.end())
 				continue;
 
-			stack.push({ bucketPtr, ++it, ignore });
+			stack.push({ bucketPtr, ++succIt, ignore });
 
-			if (! ::contains<const EqualityBucket<T>*>(visited, *it)) {
-				visited.insert(*it);
-				stack.emplace(Frame(*it, (*it)->lesserEqual.begin(), ignore));
+			if (! ::contains<const EqualityBucket<T>*>(visited, *succIt)) {
+				visited.insert(*succIt);
+				stack.emplace(Frame(*succIt, (*succIt)->lesserEqual.begin(), ignore));
 			}
 		}
 
 		return false;
 	}
-
-	bool contains(const T& val) const {
-		return ::contains<T>(mapping, val);
-	}
-
-	public:
-		EqualityBucket(std::map<T, IdentityBucket<T>>&& mp): mapping(std::move(mp)) {}
-		EqualityBucket(std::initializer_list<std::pair<const T, IdentityBucket<T>>> list): mapping(list) {}
 };
 
 template <typename T>
 class RelationsGraph {
-	std::map<T, EqualityBucket<T>> mapping;
+
+    std::set<EqualityBucket<T>> buckets;
+    std::map<T, T*> loads;
+	std::map<T, EqualityBucket<T>*> equalities;
 
 	bool areInGraph(const T& lt, const T& rt) const {
-		return contains(mapping, lt) && contains(mapping, rt);
+		return contains(equalities, lt) && contains(equalities, rt);
 	}
 	
 	public:
 	bool add(const T& val) {
-		return mapping.insert({val, {{ val, { val }}}}).second;
+		return equalities.insert({ val, nullptr }).second;
 	}
 
 	public:
-		bool isIdentical(const T& lt, const T& rt) const {
-
-			if (! areInGraph(lt, rt))
-				return false;
-
-			const auto& ltIdBucket = mapping.at(lt).at(lt);
-			return ltIdBucket.contains(rt);
-		}
-
 
 		bool isEqual(const T& lt, const T& rt) const {
 
 			if (! areInGraph(lt, rt))
 				return false;
 
-			const auto& ltEqBucket = mapping.at(lt);
-			return ltEqBucket.contains(rt);
+			return equalities.at(lt) == equalities.at(rt);
 		}
 
 		bool isLesser(const T& lt, const T& rt) const {
@@ -132,8 +104,8 @@ class RelationsGraph {
 			if (! areInGraph(lt, rt))
 				return false;
 
-			const auto& rtEqBucket = mapping.at(rt);
-			return rtEqBucket.genericContains(lt, true);
+			const auto& rtEqBucket = equalities.at(rt);
+            return rtEqBucket->subtreeContains(equalities.at(lt), true);
 		}
 
 		bool isLesserEqual(const T& lt, const T& rt) const {
@@ -141,8 +113,8 @@ class RelationsGraph {
 			if (! areInGraph(lt, rt))
 				return false;
 
-			const auto& rtEqBucket = mapping.at(rt);
-			return rtEqBucket.genericContains(lt, false);
+			const auto& rtEqBucket = equalities.at(rt);
+			return rtEqBucket->subtreeContains(equalities.at(lt), false);
 		}
 };
 
