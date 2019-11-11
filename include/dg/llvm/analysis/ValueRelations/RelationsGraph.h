@@ -5,6 +5,9 @@
 #include <map>
 #include <stack>
 #include <tuple>
+#include <memory>
+
+#include <iostream>
 
 namespace {
 
@@ -18,6 +21,20 @@ bool contains(const std::set<Val>& set, const Val& val) {
 	return set.find(val) != set.end();
 }
 
+template <typename T>
+typename std::set<std::unique_ptr<T>>::iterator findPtr(std::set<std::unique_ptr<T>>& haystack,
+														const T* const needle) {
+	auto it = haystack.begin();
+	
+	while (it != haystack.end()) {
+		if (it->get() == needle)
+			return it;
+		++it;
+	}
+
+	return it;
+}
+
 } // namespace
 
 namespace dg {
@@ -27,15 +44,17 @@ class EqualityBucket {
 
     template <typename S> friend class RelationsGraph;
 
-    using SuccessorPtr = const EqualityBucket<T>*;
-	using SuccessorSet = std::set<SuccessorPtr>;
+    using BucketPtr = EqualityBucket<T>*;
+	using BucketPtrSet = std::set<BucketPtr>;
 	
-	SuccessorSet lesserEqual;
-	SuccessorSet lesser;
+	BucketPtrSet lesserEqual;
+	BucketPtrSet lesser;
+	BucketPtrSet parents;
 
 	bool subtreeContains(const EqualityBucket<T>* needle, bool ignoreLE) const {
 
-		using Frame = std::tuple<SuccessorPtr, typename SuccessorSet::iterator, bool>;
+		using ConstBucketPtr = const EqualityBucket<T>*;
+		using Frame = std::tuple<ConstBucketPtr, typename BucketPtrSet::const_iterator, bool>;
 
         std::set<const EqualityBucket<T>*> visited;
 		std::stack<Frame> stack;
@@ -43,8 +62,8 @@ class EqualityBucket {
 		visited.insert(this);
 		stack.push(Frame(this, lesserEqual.begin(), ignoreLE));
 
-		const EqualityBucket<T>* bucketPtr;
-		typename SuccessorSet::iterator succIt;
+		ConstBucketPtr bucketPtr;
+		typename BucketPtrSet::iterator succIt;
 		bool ignore;
 		while (! stack.empty()) {
 			std::tie(bucketPtr, succIt, ignore) = stack.top();
@@ -58,12 +77,13 @@ class EqualityBucket {
 				ignore = false;
 			}
 
-			if (succIt == lesser.end())
+			if (succIt == lesser.end()) {
 				continue;
+			}
 
 			stack.push({ bucketPtr, ++succIt, ignore });
 
-			if (! ::contains<const EqualityBucket<T>*>(visited, *succIt)) {
+			if (! contains<const EqualityBucket<T>*>(visited, *succIt)) {
 				visited.insert(*succIt);
 				stack.emplace(Frame(*succIt, (*succIt)->lesserEqual.begin(), ignore));
 			}
@@ -71,12 +91,28 @@ class EqualityBucket {
 
 		return false;
 	}
+
+
+	void merge(const EqualityBucket<T>& other) {
+		// set_union does't work in place
+		lesserEqual.insert(other.lesserEqual.begin(), other.lesserEqual.end());
+		lesser.insert(other.lesser.begin(), other.lesser.end());
+		parents.insert(other.parents.begin(), other.parents.end());
+	}
+
+	void eraseFromParents() {
+		for (auto* parent : parents) {
+			parent->lesserEqual.erase(this);
+			parent->lesser.erase(this);
+		}
+	}
+	
 };
 
 template <typename T>
 class RelationsGraph {
 
-    std::set<EqualityBucket<T>> buckets;
+    std::set<std::unique_ptr<EqualityBucket<T>>> buckets;
     std::map<T, T*> loads;
 	std::map<T, EqualityBucket<T>*> equalities;
 
@@ -86,36 +122,103 @@ class RelationsGraph {
 	
 	public:
 	bool add(const T& val) {
-		return equalities.insert({ val, nullptr }).second;
+		EqualityBucket<T>* newBucketPtr = new EqualityBucket<T>;
+		buckets.emplace(newBucketPtr);
+		return equalities.emplace(val, newBucketPtr).second;
 	}
 
-	public:
+	void setEqual(const T& lt, const T& rt) {
+		EqualityBucket<T>* newBucketPtr = equalities.at(lt);
+		EqualityBucket<T>* oldBucketPtr = equalities.at(rt);
+		
+		// make successor of right successors of left too
+		newBucketPtr->merge(*oldBucketPtr);
 
-		bool isEqual(const T& lt, const T& rt) const {
-
-			if (! areInGraph(lt, rt))
-				return false;
-
-			return equalities.at(lt) == equalities.at(rt);
+		// replace pointers to right with pointers to left
+		for (auto& pair : equalities) {
+			if (pair.second == oldBucketPtr)
+				pair.second = newBucketPtr;
 		}
 
-		bool isLesser(const T& lt, const T& rt) const {
+		// remove right
+		auto it = findPtr(buckets, oldBucketPtr);
+		if (it != buckets.end())
+			oldBucketPtr->eraseFromParents();
+			buckets.erase(it);
+	}
 
-			if (! areInGraph(lt, rt))
-				return false;
+	void setLesser(const T& lt, const T& rt) {
+		EqualityBucket<T>* ltBucketPtr = equalities.at(lt);
+		EqualityBucket<T>* rtBucketPtr = equalities.at(rt);
 
-			const auto& rtEqBucket = equalities.at(rt);
-            return rtEqBucket->subtreeContains(equalities.at(lt), true);
+		rtBucketPtr->lesser.insert(ltBucketPtr);
+		ltBucketPtr->parents.insert(rtBucketPtr);
+	}
+
+	void setLesserEqual(const T& lt, const T& rt) {
+		EqualityBucket<T>* ltBucketPtr = equalities.at(lt);
+		EqualityBucket<T>* rtBucketPtr = equalities.at(rt);
+
+		rtBucketPtr->lesserEqual.insert(ltBucketPtr);
+		ltBucketPtr->parents.insert(rtBucketPtr);
+	}
+
+	void unsetRelations(const T& val) {
+		EqualityBucket<T>* valBucketPtr = equalities.at(val);
+		
+		bool onlyReference = true;
+		for (auto& pair : equalities) {
+			if (pair.first != val && pair.second == valBucketPtr) {
+				onlyReference = false;
+				break;
+			}
 		}
 
-		bool isLesserEqual(const T& lt, const T& rt) const {
-
-			if (! areInGraph(lt, rt))
-				return false;
-
-			const auto& rtEqBucket = equalities.at(rt);
-			return rtEqBucket->subtreeContains(equalities.at(lt), false);
+		if (! onlyReference) {
+			// val is no longer part of this equality bucket, it moves to its own
+			equalities.erase(val);
+			add(val);
+		} else {
+			// it severes all ties with the rest of the graph
+			valBucketPtr->eraseFromParents();
+			valBucketPtr->lesserEqual.clear();
+			valBucketPtr->lesser.clear();
 		}
+	}
+
+	void setLoad(const T& address, T& value) {
+		loads.emplace(address, &value);
+	}
+
+	void unsetLoad(const T& address) {
+		loads.erase(address);
+	}
+
+	bool isEqual(const T& lt, const T& rt) const {
+
+		if (! areInGraph(lt, rt))
+			return false;
+
+		return equalities.at(lt) == equalities.at(rt);
+	}
+
+	bool isLesser(const T& lt, const T& rt) const {
+
+		if (! areInGraph(lt, rt))
+			return false;
+
+		const auto& rtEqBucket = equalities.at(rt);
+		return rtEqBucket->subtreeContains(equalities.at(lt), true);
+	}
+
+	bool isLesserEqual(const T& lt, const T& rt) const {
+
+		if (! areInGraph(lt, rt))
+			return false;
+
+		const auto& rtEqBucket = equalities.at(rt);
+		return rtEqBucket->subtreeContains(equalities.at(lt), false);
+	}
 };
 
 } // namespace dg
