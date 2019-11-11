@@ -131,10 +131,10 @@ class RelationsGraph {
 		EqualityBucket<T>* newBucketPtr = equalities.at(lt);
 		EqualityBucket<T>* oldBucketPtr = equalities.at(rt);
 		
-		// make successor of right successors of left too
+		// make successors and parents of right belong to left too
 		newBucketPtr->merge(*oldBucketPtr);
 
-		// replace pointers to right with pointers to left
+		// replace values' pointers to right with pointers to left
 		for (auto& pair : equalities) {
 			if (pair.second == oldBucketPtr)
 				pair.second = newBucketPtr;
