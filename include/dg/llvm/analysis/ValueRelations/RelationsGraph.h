@@ -7,6 +7,8 @@
 #include <tuple>
 #include <memory>
 
+#include <cassert>
+
 #include <iostream>
 
 namespace {
@@ -55,38 +57,60 @@ class EqualityBucket {
 
 		using ConstBucketPtr = const EqualityBucket<T>*;
 		using Frame = std::tuple<ConstBucketPtr, typename BucketPtrSet::const_iterator, bool>;
-
+	
         std::set<const EqualityBucket<T>*> visited;
 		std::stack<Frame> stack;
+
+		std::cout << "haystack C: " << this << " needle A: " << needle << std::endl;
+		std::cout << "ends: " << *lesserEqual.end() << " " << *lesser.end() << std::endl;
 
 		visited.insert(this);
 		stack.push(Frame(this, lesserEqual.begin(), ignoreLE));
 
 		ConstBucketPtr bucketPtr;
-		typename BucketPtrSet::iterator succIt;
+		typename BucketPtrSet::iterator successorIt;
 		bool ignore;
 		while (! stack.empty()) {
-			std::tie(bucketPtr, succIt, ignore) = stack.top();
+			std::tie(bucketPtr, successorIt, ignore) = stack.top();
 			stack.pop();
 
-			if (bucketPtr == needle)
-				return ! ignore;
+			std::cout << "size: " << stack.size() << " ptr: " << *successorIt << std::endl;
 
-			if (succIt == lesserEqual.end()) {
-				succIt = lesser.begin();
-				ignore = false;
+			if (bucketPtr == needle) {
+				return ! ignore;
 			}
 
-			if (succIt == lesser.end()) {
+			if (successorIt == bucketPtr->lesserEqual.end()) {
+				std::cout << "visited this" << std::endl;
+				successorIt = bucketPtr->lesser.begin();
+				ignore = false;
+			}
+			
+			std::cout << "iter bef con" << *successorIt << " " << *bucketPtr->lesser.end() << std::endl;
+
+			if (successorIt == bucketPtr->lesser.end()) {
+				std::cout << "was here!!!!!!!!!11" << std::endl;
 				continue;
 			}
 
-			stack.push({ bucketPtr, ++succIt, ignore });
+			std::cout << "before planning return" << std::endl;
 
-			if (! contains<const EqualityBucket<T>*>(visited, *succIt)) {
-				visited.insert(*succIt);
-				stack.emplace(Frame(*succIt, (*succIt)->lesserEqual.begin(), ignore));
+			// plan to return for next successor
+			typename BucketPtrSet::iterator temp = successorIt;
+			std::cout << "iterators " << *temp << " " << *successorIt << std::endl;
+			++temp;
+			std::cout << "iterators " << *temp << " " << *successorIt << std::endl;
+			stack.push({ bucketPtr, temp, ignore });
+
+			std::cout << "before inserting successor" << std::endl;
+
+			// plan visit to successor
+			if (! contains<const EqualityBucket<T>*>(visited, *successorIt)) {
+				visited.insert(*successorIt);
+				stack.emplace(Frame(*successorIt, (*successorIt)->lesserEqual.begin(), ignore));
 			}
+
+			std::cout << "end iteration" << std::endl << std:: endl;
 		}
 
 		return false;
@@ -121,9 +145,39 @@ class RelationsGraph {
 	}
 	
 	public:
+
+	RelationsGraph() = default;
+	
+	RelationsGraph(const RelationsGraph& other)
+		: loads(other.loads), equalities(other.equalities) {
+		
+		for(const auto& bucketPtr : buckets) {
+			assert(bucketPtr);
+			
+			EqualityBucket<T>* newBucketPtr = new EqualityBucket<T>(*bucketPtr);
+			buckets.emplace(newBucketPtr);
+		}
+		
+	}
+
+	friend void swap(RelationsGraph& first, RelationsGraph& second) {
+		using std::swap;
+
+		swap(first.buckets, second.buckets);
+		swap(first.loads, second.loads);
+		swap(first.equalities, second.equalities);
+	}
+
+	RelationsGraph& operator=(RelationsGraph other) {
+		swap(*this, other);
+
+		return *this;
+	}
+
 	bool add(const T& val) {
 		EqualityBucket<T>* newBucketPtr = new EqualityBucket<T>;
 		buckets.emplace(newBucketPtr);
+		
 		return equalities.emplace(val, newBucketPtr).second;
 	}
 
@@ -142,9 +196,10 @@ class RelationsGraph {
 
 		// remove right
 		auto it = findPtr(buckets, oldBucketPtr);
-		if (it != buckets.end())
+		if (it != buckets.end()) {
 			oldBucketPtr->eraseFromParents();
 			buckets.erase(it);
+		}
 	}
 
 	void setLesser(const T& lt, const T& rt) {
@@ -181,6 +236,7 @@ class RelationsGraph {
 		} else {
 			// it severes all ties with the rest of the graph
 			valBucketPtr->eraseFromParents();
+			valBucketPtr->parents.clear();
 			valBucketPtr->lesserEqual.clear();
 			valBucketPtr->lesser.clear();
 		}
@@ -208,6 +264,7 @@ class RelationsGraph {
 			return false;
 
 		const auto& rtEqBucket = equalities.at(rt);
+
 		return rtEqBucket->subtreeContains(equalities.at(lt), true);
 	}
 
@@ -217,6 +274,7 @@ class RelationsGraph {
 			return false;
 
 		const auto& rtEqBucket = equalities.at(rt);
+
 		return rtEqBucket->subtreeContains(equalities.at(lt), false);
 	}
 };
