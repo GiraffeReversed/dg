@@ -134,7 +134,7 @@ public:
 	
 	RelationsGraph(const RelationsGraph& other)
 		: loads(other.loads), equalities(other.equalities) {
-		
+	// doesnt work	
 		for(const auto& bucketPtr : buckets) {
 			assert(bucketPtr);
 			
@@ -166,9 +166,21 @@ public:
 	}
 
 	void setEqual(const T& lt, const T& rt) {
+
+		if (isEqual(lt, rt)) return;
+
+		// assert no conflicting relations
+		assert(! isLesser(lt, rt));
+		assert(! isLesser(rt, lt));
+
 		EqualityBucket<T>* newBucketPtr = equalities.at(lt);
 		EqualityBucket<T>* oldBucketPtr = equalities.at(rt);
 		
+		// handle lesserEqual specializing to equal
+		if (isLesserEqual(lt, rt) || isLesserEqual(rt, lt)) {
+			// TODO merge all nodes on path between
+		}
+
 		// make successors and parents of right belong to left too
 		newBucketPtr->merge(*oldBucketPtr);
 
@@ -187,14 +199,42 @@ public:
 	}
 
 	void setLesser(const T& lt, const T& rt) {
+
+		if (isLesser(lt, rt)) return;
+
+		// assert no conflicting relations
+		assert(! isEqual(lt, rt));
+		assert(! isLesserEqual(rt, lt));
+		assert(! isLesser(rt, lt));
+
 		EqualityBucket<T>* ltBucketPtr = equalities.at(lt);
 		EqualityBucket<T>* rtBucketPtr = equalities.at(rt);
+
+		// handle lesserEqual specializing to lesser
+		if (isLesserEqual(lt, rt)) {
+			if (contains<EqualityBucket<T>*>(rtBucketPtr->lesserEqual, ltBucketPtr))
+				rtBucketPtr->lesserEqual.erase(ltBucketPtr);
+			else
+				assert(0); // more buckets in between, cant decide this
+		}
 
 		rtBucketPtr->lesser.insert(ltBucketPtr);
 		ltBucketPtr->parents.insert(rtBucketPtr);
 	}
 
 	void setLesserEqual(const T& lt, const T& rt) {
+
+		if (isLesserEqual(lt, rt) || isEqual(lt, rt) || isLesser(lt, rt)) return;
+
+		// assert no conflicting relations
+		assert(! isLesser(rt, lt));
+
+		// infer values being equal
+		if (isLesserEqual(rt, lt)) {
+			setEqual(lt, rt);
+			return;
+		}
+
 		EqualityBucket<T>* ltBucketPtr = equalities.at(lt);
 		EqualityBucket<T>* rtBucketPtr = equalities.at(rt);
 
