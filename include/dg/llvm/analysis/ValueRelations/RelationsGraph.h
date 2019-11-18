@@ -53,10 +53,9 @@ class EqualityBucket {
 	BucketPtrSet lesser;
 	BucketPtrSet parents;
 
-	using ConstBucketPtr = const EqualityBucket<T>*;
-	using Frame = std::tuple<ConstBucketPtr, typename BucketPtrSet::const_iterator, bool>;
+	using Frame = std::tuple<BucketPtr, typename BucketPtrSet::iterator, bool>;
 
-	std::pair<std::stack<Frame>, bool> subtreeContains(const EqualityBucket<T>* needle, bool ignoreLE) const {
+	std::pair<std::stack<Frame>, bool> subtreeContains(const EqualityBucket<T>* needle, bool ignoreLE) {
 
         std::set<const EqualityBucket<T>*> visited;
 		std::stack<Frame> stack;
@@ -64,7 +63,7 @@ class EqualityBucket {
 		visited.insert(this);
 		stack.push(Frame(this, lesserEqual.begin(), ignoreLE));
 
-		ConstBucketPtr bucketPtr;
+		BucketPtr bucketPtr;
 		typename BucketPtrSet::iterator successorIt;
 		bool ignore;
 		while (! stack.empty()) {
