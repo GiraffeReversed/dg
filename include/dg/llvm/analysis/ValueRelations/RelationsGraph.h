@@ -53,11 +53,11 @@ class EqualityBucket {
 	BucketPtrSet lesser;
 	BucketPtrSet parents;
 
-	bool subtreeContains(const EqualityBucket<T>* needle, bool ignoreLE) const {
+	using ConstBucketPtr = const EqualityBucket<T>*;
+	using Frame = std::tuple<ConstBucketPtr, typename BucketPtrSet::const_iterator, bool>;
 
-		using ConstBucketPtr = const EqualityBucket<T>*;
-		using Frame = std::tuple<ConstBucketPtr, typename BucketPtrSet::const_iterator, bool>;
-	
+	std::pair<std::stack<Frame>, bool> subtreeContains(const EqualityBucket<T>* needle, bool ignoreLE) const {
+
         std::set<const EqualityBucket<T>*> visited;
 		std::stack<Frame> stack;
 
@@ -69,12 +69,14 @@ class EqualityBucket {
 		bool ignore;
 		while (! stack.empty()) {
 			std::tie(bucketPtr, successorIt, ignore) = stack.top();
-			stack.pop();
 			
 			// we found searched bucket
 			if (bucketPtr == needle) {
-				return ! ignore;
+				if (ignore)	return { std::stack<Frame>(), false };
+				return { stack, true };
 			}
+
+			stack.pop();
 
 			// we searched all lesserEqual buckets, goiong on to lesser buckets
 			if (successorIt == bucketPtr->lesserEqual.end()) {
@@ -97,7 +99,7 @@ class EqualityBucket {
 			}
 		}
 
-		return false;
+		return { std::stack<Frame>(), false };
 	}
 
 
@@ -288,7 +290,7 @@ public:
 			return false;
 
 		const auto& rtEqBucket = equalities.at(rt);
-		return rtEqBucket->subtreeContains(equalities.at(lt), true);
+		return rtEqBucket->subtreeContains(equalities.at(lt), true).second;
 	}
 
 	bool isLesserEqual(const T& lt, const T& rt) const {
@@ -297,7 +299,7 @@ public:
 			return false;
 
 		const auto& rtEqBucket = equalities.at(rt);
-		return rtEqBucket->subtreeContains(equalities.at(lt), false);
+		return rtEqBucket->subtreeContains(equalities.at(lt), false).second;
 	}
 };
 
