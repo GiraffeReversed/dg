@@ -6,6 +6,7 @@
 #include <stack>
 #include <tuple>
 #include <memory>
+#include <algorithm>
 
 #include <cassert>
 
@@ -36,6 +37,14 @@ typename std::set<std::unique_ptr<T>>::iterator findPtr(std::set<std::unique_ptr
 
 	return it;
 }
+
+
+template <typename T>
+void substitueInSet(const std::map<T, T>& mapping, std::set<T>& set) {
+
+	std::for_each(set.begin(), set.end(), [&mapping](const T& elem) { return mapping.at(elem); } );
+}
+
 
 } // namespace
 
@@ -115,6 +124,12 @@ class EqualityBucket {
 			parent->lesser.erase(this);
 		}
 	}
+
+	void substitueAll(const std::map<EqualityBucket<T>*, EqualityBucket<T>*>& oldToNewPtr) {
+		substitueInSet<EqualityBucket<T>*>(oldToNewPtr, lesserEqual);
+		substitueInSet<EqualityBucket<T>*>(oldToNewPtr, lesser);
+		substitueInSet<EqualityBucket<T>*>(oldToNewPtr, parents);
+	}
 	
 };
 
@@ -134,14 +149,28 @@ public:
 	RelationsGraph() = default;
 	
 	RelationsGraph(const RelationsGraph& other)
-		: loads(other.loads), equalities(other.equalities) {
-	// doesnt work	
-		for(const auto& bucketPtr : buckets) {
-			assert(bucketPtr);
+		: loads(other.loads) {
+
+		std::map<EqualityBucket<T>*, EqualityBucket<T>*> oldToNewPtr;
+
+		// create new copies of buckets
+		for(const std::unique_ptr<EqualityBucket<T>>& bucketUniquePtr : other.buckets) {
+			assert(bucketUniquePtr);
+			assert(bucketUniquePtr.get());
 			
-			EqualityBucket<T>* newBucketPtr = new EqualityBucket<T>(*bucketPtr);
+			EqualityBucket<T>* newBucketPtr = new EqualityBucket<T>(*bucketUniquePtr);
 			buckets.emplace(newBucketPtr);
+
+			oldToNewPtr.emplace(bucketUniquePtr.get(), newBucketPtr);
 		}
+
+		// set successors to point to new copies
+		for (const std::unique_ptr<EqualityBucket<T>>& bucketUniquePtr : buckets)
+			bucketUniquePtr->substitueAll(oldToNewPtr);
+
+		// set equalities to use new copies
+		for (auto& equality : other.equalities)
+			equalities.emplace(equality.first, oldToNewPtr.at(equality.second));
 		
 	}
 
