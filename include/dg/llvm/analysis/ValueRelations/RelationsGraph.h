@@ -86,7 +86,7 @@ class EqualityBucket {
 
 			stack.pop();
 
-			// we searched all lesserEqual buckets, goiong on to lesser buckets
+			// we searched all lesserEqual buckets, going on to lesser buckets
 			if (successorIt == bucketPtr->lesserEqual.end()) {
 				successorIt = bucketPtr->lesser.begin();
 			}
@@ -138,10 +138,10 @@ class RelationsGraph {
 
     std::set<std::unique_ptr<EqualityBucket<T>>> buckets;
     std::map<T, T*> loads;
-	std::map<T, EqualityBucket<T>*> equalities;
+	std::map<T, EqualityBucket<T>*> mapToBucket;
 
 	bool areInGraph(const T& lt, const T& rt) const {
-		return contains(equalities, lt) && contains(equalities, rt);
+		return contains(mapToBucket, lt) && contains(mapToBucket, rt);
 	}
 	
 public:
@@ -168,9 +168,9 @@ public:
 		for (const std::unique_ptr<EqualityBucket<T>>& bucketUniquePtr : buckets)
 			bucketUniquePtr->substitueAll(oldToNewPtr);
 
-		// set equalities to use new copies
-		for (auto& equality : other.equalities)
-			equalities.emplace(equality.first, oldToNewPtr.at(equality.second));
+		// set map to use new copies
+		for (auto& pair : other.mapToBucket)
+			mapToBucket.emplace(pair.first, oldToNewPtr.at(pair.second));
 		
 	}
 
@@ -179,7 +179,7 @@ public:
 
 		swap(first.buckets, second.buckets);
 		swap(first.loads, second.loads);
-		swap(first.equalities, second.equalities);
+		swap(first.mapToBucket, second.mapToBucket);
 	}
 
 	RelationsGraph& operator=(RelationsGraph other) {
@@ -188,11 +188,10 @@ public:
 		return *this;
 	}
 
-	bool add(const T& val) {
+	void add(const T& val) {
 		EqualityBucket<T>* newBucketPtr = new EqualityBucket<T>;
 		buckets.emplace(newBucketPtr);
-		
-		return equalities.emplace(val, newBucketPtr).second;
+		mapToBucket.emplace(val, newBucketPtr);
 	}
 
 	void setEqual(const T& lt, const T& rt) {
@@ -203,8 +202,8 @@ public:
 		assert(! isLesser(lt, rt));
 		assert(! isLesser(rt, lt));
 
-		EqualityBucket<T>* newBucketPtr = equalities.at(lt);
-		EqualityBucket<T>* oldBucketPtr = equalities.at(rt);
+		EqualityBucket<T>* newBucketPtr = mapToBucket.at(lt);
+		EqualityBucket<T>* oldBucketPtr = mapToBucket.at(rt);
 		
 		// handle lesserEqual specializing to equal
 		if (isLesserEqual(lt, rt) || isLesserEqual(rt, lt)) {
@@ -215,7 +214,7 @@ public:
 		newBucketPtr->merge(*oldBucketPtr);
 
 		// replace values' pointers to right with pointers to left
-		for (auto& pair : equalities) {
+		for (auto& pair : mapToBucket) {
 			if (pair.second == oldBucketPtr)
 				pair.second = newBucketPtr;
 		}
@@ -237,15 +236,15 @@ public:
 		assert(! isLesserEqual(rt, lt));
 		assert(! isLesser(rt, lt));
 
-		EqualityBucket<T>* ltBucketPtr = equalities.at(lt);
-		EqualityBucket<T>* rtBucketPtr = equalities.at(rt);
+		EqualityBucket<T>* ltBucketPtr = mapToBucket.at(lt);
+		EqualityBucket<T>* rtBucketPtr = mapToBucket.at(rt);
 
 		// handle lesserEqual specializing to lesser
 		if (isLesserEqual(lt, rt)) {
 			if (contains<EqualityBucket<T>*>(rtBucketPtr->lesserEqual, ltBucketPtr))
 				rtBucketPtr->lesserEqual.erase(ltBucketPtr);
 			else
-				assert(0); // more buckets in between, cant decide this
+				assert(0); // more buckets in between, can't decide this
 		}
 
 		rtBucketPtr->lesser.insert(ltBucketPtr);
@@ -265,18 +264,18 @@ public:
 			return;
 		}
 
-		EqualityBucket<T>* ltBucketPtr = equalities.at(lt);
-		EqualityBucket<T>* rtBucketPtr = equalities.at(rt);
+		EqualityBucket<T>* ltBucketPtr = mapToBucket.at(lt);
+		EqualityBucket<T>* rtBucketPtr = mapToBucket.at(rt);
 
 		rtBucketPtr->lesserEqual.insert(ltBucketPtr);
 		ltBucketPtr->parents.insert(rtBucketPtr);
 	}
 
 	void unsetRelations(const T& val) {
-		EqualityBucket<T>* valBucketPtr = equalities.at(val);
+		EqualityBucket<T>* valBucketPtr = mapToBucket.at(val);
 		
 		bool onlyReference = true;
-		for (auto& pair : equalities) {
+		for (auto& pair : mapToBucket) {
 			if (pair.first != val && pair.second == valBucketPtr) {
 				onlyReference = false;
 				break;
@@ -284,8 +283,8 @@ public:
 		}
 
 		if (! onlyReference) {
-			// val is no longer part of this equality bucket, it moves to its own
-			equalities.erase(val);
+			// val moves to its own equality bucket
+			mapToBucket.erase(val);
 			add(val);
 		} else {
 			// it severes all ties with the rest of the graph
@@ -293,6 +292,7 @@ public:
 			valBucketPtr->parents.clear();
 			valBucketPtr->lesserEqual.clear();
 			valBucketPtr->lesser.clear();
+			// TODO unset from lesser, lesserEqual parents
 		}
 	}
 
@@ -309,7 +309,7 @@ public:
 		if (! areInGraph(lt, rt))
 			return false;
 
-		return equalities.at(lt) == equalities.at(rt);
+		return mapToBucket.at(lt) == mapToBucket.at(rt);
 	}
 
 	bool isLesser(const T& lt, const T& rt) const {
@@ -317,8 +317,8 @@ public:
 		if (! areInGraph(lt, rt))
 			return false;
 
-		const auto& rtEqBucket = equalities.at(rt);
-		return rtEqBucket->subtreeContains(equalities.at(lt), true).second;
+		const auto& rtEqBucket = mapToBucket.at(rt);
+		return rtEqBucket->subtreeContains(mapToBucket.at(lt), true).second;
 	}
 
 	bool isLesserEqual(const T& lt, const T& rt) const {
@@ -326,8 +326,8 @@ public:
 		if (! areInGraph(lt, rt))
 			return false;
 
-		const auto& rtEqBucket = equalities.at(rt);
-		return rtEqBucket->subtreeContains(equalities.at(lt), false).second;
+		const auto& rtEqBucket = mapToBucket.at(rt);
+		return rtEqBucket->subtreeContains(mapToBucket.at(lt), false).second;
 	}
 };
 
