@@ -118,11 +118,22 @@ class EqualityBucket {
 		parents.insert(other.parents.begin(), other.parents.end());
 	}
 
-	void eraseFromParents() {
+	void disconnectAll() {
 		for (auto* parent : parents) {
 			parent->lesserEqual.erase(this);
 			parent->lesser.erase(this);
 		}
+		parents.clear();
+
+		for (EqualityBucket& bucketPtr : lesserEqual) {
+			bucketPtr->parents.erase(this);
+		}
+		lesserEqual.clear();
+		
+		for (EqualityBucket& bucketPtr : lesser) {
+			bucketPtr->parents.erase(this);
+		}
+		lesser.clear();
 	}
 
 	void substitueAll(const std::map<EqualityBucket<T>*, EqualityBucket<T>*>& oldToNewPtr) {
@@ -210,19 +221,19 @@ public:
 			// TODO merge all nodes on path between
 		}
 
-		// make successors and parents of right belong to left too
-		newBucketPtr->merge(*oldBucketPtr);
-
 		// replace values' pointers to right with pointers to left
 		for (auto& pair : mapToBucket) {
 			if (pair.second == oldBucketPtr)
 				pair.second = newBucketPtr;
 		}
 
+		// make successors and parents of right belong to left too
+		newBucketPtr->merge(*oldBucketPtr);
+
 		// remove right
 		auto it = findPtr(buckets, oldBucketPtr);
 		if (it != buckets.end()) {
-			oldBucketPtr->eraseFromParents();
+			oldBucketPtr->disconnectAll();
 			buckets.erase(it);
 		}
 	}
@@ -288,11 +299,7 @@ public:
 			add(val);
 		} else {
 			// it severes all ties with the rest of the graph
-			valBucketPtr->eraseFromParents();
-			valBucketPtr->parents.clear();
-			valBucketPtr->lesserEqual.clear();
-			valBucketPtr->lesser.clear();
-			// TODO unset from lesser, lesserEqual parents
+			valBucketPtr->disconnectAll();
 		}
 	}
 
