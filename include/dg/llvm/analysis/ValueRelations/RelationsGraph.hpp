@@ -331,6 +331,14 @@ public:
 			mapToBucket.erase(val);
 			add(val);
 		} else {
+			// overconnect parents to children
+			for (EqualityBucket<T>* parent : valBucketPtr->parents) {
+				parent->lesserEqual.insert(valBucketPtr->lesserEqual.begin(),
+										   valBucketPtr->lesserEqual.end());
+				parent->lesser.insert(valBucketPtr->lesser.begin(),
+									  valBucketPtr->lesser.end());
+			}
+
 			// it severes all ties with the rest of the graph
 			valBucketPtr->disconnectAll();
 		}
