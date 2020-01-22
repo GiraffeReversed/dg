@@ -4,6 +4,7 @@
 #include <set>
 #include <map>
 #include <stack>
+#include <vector>
 #include <tuple>
 #include <memory>
 #include <algorithm>
@@ -125,12 +126,12 @@ class EqualityBucket {
 		}
 		parents.clear();
 
-		for (EqualityBucket& bucketPtr : lesserEqual) {
+		for (auto* bucketPtr : lesserEqual) {
 			bucketPtr->parents.erase(this);
 		}
 		lesserEqual.clear();
 		
-		for (EqualityBucket& bucketPtr : lesser) {
+		for (auto* bucketPtr : lesser) {
 			bucketPtr->parents.erase(this);
 		}
 		lesser.clear();
@@ -207,6 +208,11 @@ public:
 
 	void setEqual(const T& lt, const T& rt) {
 
+		// DANGER defined duplicitly (already in subtreeContains)
+		using BucketPtr = EqualityBucket<T>*;
+		using BucketPtrSet = std::set<BucketPtr>;
+		using Frame = std::tuple<BucketPtr, typename BucketPtrSet::iterator, bool>;
+
 		if (isEqual(lt, rt)) return;
 
 		// assert no conflicting relations
@@ -216,25 +222,51 @@ public:
 		EqualityBucket<T>* newBucketPtr = mapToBucket.at(lt);
 		EqualityBucket<T>* oldBucketPtr = mapToBucket.at(rt);
 		
+		std::vector<BucketPtr> toMerge;
+
 		// handle lesserEqual specializing to equal
 		if (isLesserEqual(lt, rt) || isLesserEqual(rt, lt)) {
-			// TODO merge all nodes on path between
+
+			std::pair<std::stack<Frame>, bool> pair;
+			if (isLesserEqual(lt, rt)) {
+				pair = oldBucketPtr->subtreeContains(newBucketPtr, false);
+			} else {
+				pair = newBucketPtr->subtreeContains(oldBucketPtr, false);
+			}
+			std::stack<Frame> frames = pair.first;
+
+			Frame frame;
+			while (! frames.empty()) {
+				frame = frames.top();
+				toMerge.push_back(std::get<0>(frame));
+				frames.pop();
+			}
+
+		} else {
+			toMerge = { newBucketPtr, oldBucketPtr };
 		}
 
-		// replace values' pointers to right with pointers to left
-		for (auto& pair : mapToBucket) {
-			if (pair.second == oldBucketPtr)
-				pair.second = newBucketPtr;
-		}
+		newBucketPtr = toMerge[0];
 
-		// make successors and parents of right belong to left too
-		newBucketPtr->merge(*oldBucketPtr);
+		for (auto it = ++toMerge.begin(); it != toMerge.end(); ++it) {
 
-		// remove right
-		auto it = findPtr(buckets, oldBucketPtr);
-		if (it != buckets.end()) {
-			oldBucketPtr->disconnectAll();
-			buckets.erase(it);
+			oldBucketPtr = *it;
+
+			// replace values' pointers to right with pointers to left
+			for (auto& pair : mapToBucket) {
+				if (pair.second == oldBucketPtr)
+					pair.second = newBucketPtr;
+			}
+
+			// make successors and parents of right belong to left too
+			newBucketPtr->merge(*oldBucketPtr);
+
+			// remove right
+			auto ite = findPtr(buckets, oldBucketPtr);
+			if (ite != buckets.end()) {
+				oldBucketPtr->disconnectAll();
+				buckets.erase(ite);
+			}
 		}
 	}
 
