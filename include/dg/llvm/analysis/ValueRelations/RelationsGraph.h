@@ -90,6 +90,7 @@ class EqualityBucket {
 			// we searched all lesserEqual buckets, going on to lesser buckets
 			if (successorIt == bucketPtr->lesserEqual.end()) {
 				successorIt = bucketPtr->lesser.begin();
+				ignore = false;
 			}
 			
 			// we searched all successors
