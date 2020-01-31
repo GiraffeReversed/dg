@@ -12,6 +12,7 @@
 
 namespace dg {
 namespace analysis {
+namespace vr {
 
 class VROp {
 protected:
@@ -121,6 +122,7 @@ struct VRBBlock {
     const VRLocation *first() const { return locations.front().get(); }
 };
 
+} // namespace vr
 } // namespace analysis
 } // namespace dg
 
