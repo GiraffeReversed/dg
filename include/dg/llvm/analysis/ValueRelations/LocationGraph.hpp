@@ -2,7 +2,9 @@
 #define _DG_LLVM_VALUE_RELATIONS_LOCATIONS_GRAPH_H_
 
 #include <list>
+#include <llvm/IR/Value.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Module.h>
 
 #include "RelationsGraph.hpp"
 
@@ -72,6 +74,7 @@ struct VRAssume : public VROp {
 };
 
 struct VRLocation;
+
 struct VREdge {
     VRLocation *source;
     VRLocation *target;
@@ -85,14 +88,14 @@ struct VREdge {
 struct VRLocation  {
     const unsigned id;
 
-    RelationsGraph<const llvm::Value *> rg;
+    RelationsGraph<const llvm::Instruction *> rg;
 
     std::vector<VREdge *> predecessors;
     std::vector<std::unique_ptr<VREdge>> successors;
 
     VRLocation(unsigned _id) : id(_id) {}
 
-    void addEdge(std::unique_ptr<VREdge>&& edge) {
+    void connect(std::unique_ptr<VREdge>&& edge) {
         edge->target->predecessors.push_back(edge.get());
         successors.emplace_back(std::move(edge));
     }
@@ -120,6 +123,91 @@ struct VRBBlock {
     VRLocation *first() { return locations.front().get(); }
     const VRLocation *last() const { return locations.back().get(); }
     const VRLocation *first() const { return locations.front().get(); }
+};
+
+class LocationGraph {
+    const llvm::Module& module;
+    unsigned last_node_id = 0;
+
+    // VRLocation corresponding to the state of the program BEFORE executing the instruction
+    std::map<const llvm::Instruction *, VRLocation *> locationMapping;
+    std::map<const llvm::BasicBlock *, std::unique_ptr<VRBlock>> blockMapping;
+
+    LocationGraph(const llvm::Module& m): module(m) {
+        for (const llvm::Function& f : module) {
+            build(f);
+        }
+    }
+
+    void build(const llvm::Function& function) {
+        for (const llvm::BasicBlock& block : function) {
+            assert(block.size() != 0);
+            build(block);
+        }
+    }
+
+    void build(const llvm::BasicBlock& block) {
+        VRBBlock* vrblock = newBBlock(block);
+
+        auto it = block.begin();
+        const VRLocation * previous = std::unique_ptr<VRLocation>(newLocation(*it));
+        vrblock->append(std::move(loc));
+        ++it;
+
+        for (; it != block.end(); ++it) {
+            const llvm::Instruction& inst = *it;
+            VRLocation * newLoc = std::unique_ptr<VRLocation>(newLocation(inst));
+
+            VREdge* edge = new VREdge(vrblock->last(), newLoc.get(),
+                                   std::unique_ptr<VROp>(new VRInstruction(inst)));
+            vrblock->last()->connect(std::unique_ptr<VREdge>(edge));
+
+            vrblock->append(std::move(newLoc));
+        }
+    }
+
+    VRLocation *newLocation(const llvm::Instruction& inst) {
+        assert(inst);
+        assert(locationMapping.find(&inst) == locationMapping.end());
+
+        auto location = new VRLocation(++last_node_id);
+        assert(location);
+
+        locationMapping.emplace(&v, location);
+        return location;
+    }
+
+    VRBBlock *newBBlock(const llvm::BasicBlock& B) {
+        assert(B);
+        assert(blockMapping.find(&B) == blockMapping.end());
+
+        auto block = new VRBBlock();
+        assert(block);
+
+        blockMapping.emplace(&B, block);
+        return block;
+    }
+
+    VRBBlock *getVRBBlock(const llvm::BasicBlock& B) {
+        const LocationGraph& constThis = this;
+        return const_cast<VRLocation*> constThis.getVRBBlock(B);
+    }
+
+    const VRBBlock *getVRBBlock(const llvm::BasicBlock& B) const {
+        auto it = blockMapping.find(&B);
+        return it == blockMapping.end() ? nullptr : it->second.get();
+    }
+
+    VRLocation *getVRLocation(const llvm::Instruction& inst) {
+        const LocationGraph& constThis = this;
+        return const_cast<VRLocation*> constThis.getVRLocation(inst);
+    }
+
+    const VRLocation *getVRLocation(const llvm::Instruction& inst) const {
+        auto it = locationMapping.find(&inst);
+        return it == locationMapping.end() ? nullptr : it->second;
+    }
+
 };
 
 } // namespace vr
