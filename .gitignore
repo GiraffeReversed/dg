@@ -76,3 +76,8 @@ compile_commands.json
 CMakeLists.txt.user*
 .vscode
 main.cpp
+CMakeCache.txt
+CMakeFiles/
+tests/CMakeFiles/
+tools/CMakeFiles/
+DartConfiguration.tcl
