@@ -73,7 +73,8 @@ struct VRAssume : public VROp {
 
 #ifndef NDEBUG
     void dump() const override {
-        std::cout << "[" << equals.first << " = " << equals.second << "]";
+        std::cout << "assuming " << debug::getValName(equals.first)
+                  << " = " << debug::getValName(equals.second);
     }
 #endif
 };
@@ -101,7 +102,8 @@ struct VRLocation  {
     VRLocation(unsigned _id) : id(_id) {}
 
     void connect(std::unique_ptr<VREdge>&& edge) {
-        edge->target->predecessors.push_back(edge.get());
+        if (edge->target)
+            edge->target->predecessors.push_back(edge.get());
         successors.emplace_back(std::move(edge));
     }
 
@@ -129,7 +131,7 @@ struct VRBBlock {
     const VRLocation *first() const { return locations.front().get(); }
 };
 
-class LocationGraph {
+struct LocationGraph {
     const llvm::Module& module;
     unsigned last_node_id = 0;
 
@@ -160,8 +162,12 @@ class LocationGraph {
             } else if (llvm::isa<llvm::SwitchInst>(terminator)) {
                 buildSwitch(llvm::cast<llvm::SwitchInst>(terminator), vrblock);
 
+            } else if (llvm::isa<llvm::ReturnInst>(terminator)) {
+                buildReturn(llvm::cast<llvm::ReturnInst>(terminator), vrblock);
+
             } else if (llvm::succ_begin(&block) != llvm::succ_end(&block)) {
 #ifndef NDEBUG
+                std::cerr << "Unhandled  terminator: " << std::endl;
                 llvm::errs() << "Unhandled terminator: " << *terminator << "\n";
 #endif
                 abort();
@@ -216,12 +222,19 @@ class LocationGraph {
         }
     }
 
+    void buildReturn(const llvm::ReturnInst* inst, VRBBlock* vrblock) {
+        auto op = std::unique_ptr<VROp>(new VRInstruction(inst));
+        VREdge* edge = new VREdge(vrblock->last(), nullptr, std::move(op));
+
+        vrblock->last()->connect(std::unique_ptr<VREdge>(edge));
+    }
+
     void build(const llvm::BasicBlock& block) {
         VRBBlock* vrblock = newBBlock(&block);
 
         auto it = block.begin();
-        VRLocation* previous = newLocation(&(*it));
-        vrblock->append(previous);
+        const llvm::Instruction* previous = &(*it);
+        vrblock->append(newLocation(previous));
         ++it;
 
         for (; it != block.end(); ++it) {
@@ -229,10 +242,11 @@ class LocationGraph {
             VRLocation* newLoc = newLocation(&inst);
 
             VREdge* edge = new VREdge(vrblock->last(), newLoc,
-                                   std::unique_ptr<VROp>(new VRInstruction(inst)));
+                                   std::unique_ptr<VROp>(new VRInstruction(previous)));
             vrblock->last()->connect(std::unique_ptr<VREdge>(edge));
 
             vrblock->append(newLoc);
+            previous = &inst;
         }
     }
 
