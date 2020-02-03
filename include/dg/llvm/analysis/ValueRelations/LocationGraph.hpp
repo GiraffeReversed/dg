@@ -1,5 +1,5 @@
-#ifndef _DG_LLVM_VALUE_RELATIONS_LOCATIONS_GRAPH_H_
-#define _DG_LLVM_VALUE_RELATIONS_LOCATIONS_GRAPH_H_
+#ifndef _DG_LLVM_VALUE_RELATIONS_LOCATION_GRAPH_HPP_
+#define _DG_LLVM_VALUE_RELATIONS_LOCATION_GRAPH_HPP_
 
 #include <list>
 #include <llvm/IR/Value.h>
@@ -298,4 +298,4 @@ struct LocationGraph {
 } // namespace analysis
 } // namespace dg
 
-#endif //_DG_LLVM_VALUE_RELATIONS_LOCATIONS_GRAPH_H_
+#endif //_DG_LLVM_VALUE_RELATIONS_LOCATION_GRAPH_HPP_
