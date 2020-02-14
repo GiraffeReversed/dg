@@ -52,12 +52,11 @@ void substitueInSet(const std::map<T, T>& mapping, std::set<T>& set) {
 namespace dg {
 namespace vr {
 
-template <typename T>
 class EqualityBucket {
 
     template <typename S> friend class RelationsGraph;
 
-    using BucketPtr = EqualityBucket<T>*;
+    using BucketPtr = EqualityBucket*;
 	using BucketPtrSet = std::set<BucketPtr>;
 	
 	BucketPtrSet lesserEqual;
@@ -66,9 +65,9 @@ class EqualityBucket {
 
 	using Frame = std::tuple<BucketPtr, typename BucketPtrSet::iterator, bool>;
 
-	std::pair<std::stack<Frame>, bool> subtreeContains(const EqualityBucket<T>* needle, bool ignoreLE) {
+	std::pair<std::stack<Frame>, bool> subtreeContains(const EqualityBucket* needle, bool ignoreLE) {
 
-        std::set<const EqualityBucket<T>*> visited;
+        std::set<const EqualityBucket*> visited;
 		std::stack<Frame> stack;
 
 		visited.insert(this);
@@ -104,7 +103,7 @@ class EqualityBucket {
 			--successorIt;
 
 			// plan visit to successor
-			if (! contains<const EqualityBucket<T>*>(visited, *successorIt)) {
+			if (! contains<const EqualityBucket*>(visited, *successorIt)) {
 				visited.insert(*successorIt);
 				stack.emplace(Frame(*successorIt, (*successorIt)->lesserEqual.begin(), ignore));
 			}
@@ -114,7 +113,7 @@ class EqualityBucket {
 	}
 
 
-	void merge(const EqualityBucket<T>& other) {
+	void merge(const EqualityBucket& other) {
 		// set_union does't work in place
 		lesserEqual.insert(other.lesserEqual.begin(), other.lesserEqual.end());
 		lesser.insert(other.lesser.begin(), other.lesser.end());
@@ -139,20 +138,20 @@ class EqualityBucket {
 		lesser.clear();
 	}
 
-	void substitueAll(const std::map<EqualityBucket<T>*, EqualityBucket<T>*>& oldToNewPtr) {
-		substitueInSet<EqualityBucket<T>*>(oldToNewPtr, lesserEqual);
-		substitueInSet<EqualityBucket<T>*>(oldToNewPtr, lesser);
-		substitueInSet<EqualityBucket<T>*>(oldToNewPtr, parents);
+	void substitueAll(const std::map<EqualityBucket*, EqualityBucket*>& oldToNewPtr) {
+		substitueInSet<EqualityBucket*>(oldToNewPtr, lesserEqual);
+		substitueInSet<EqualityBucket*>(oldToNewPtr, lesser);
+		substitueInSet<EqualityBucket*>(oldToNewPtr, parents);
 	}
-	
+
 };
 
 template <typename T>
 class RelationsGraph {
 
-    std::set<std::unique_ptr<EqualityBucket<T>>> buckets;
+    std::set<std::unique_ptr<EqualityBucket>> buckets;
     std::map<T, T*> loads;
-	std::map<T, EqualityBucket<T>*> mapToBucket;
+	std::map<T, EqualityBucket*> mapToBucket;
 
 	bool areInGraph(const T& lt, const T& rt) const {
 		return contains(mapToBucket, lt) && contains(mapToBucket, rt);
@@ -165,21 +164,21 @@ public:
 	RelationsGraph(const RelationsGraph& other)
 		: loads(other.loads) {
 
-		std::map<EqualityBucket<T>*, EqualityBucket<T>*> oldToNewPtr;
+		std::map<EqualityBucket*, EqualityBucket*> oldToNewPtr;
 
 		// create new copies of buckets
-		for(const std::unique_ptr<EqualityBucket<T>>& bucketUniquePtr : other.buckets) {
+		for(const std::unique_ptr<EqualityBucket>& bucketUniquePtr : other.buckets) {
 			assert(bucketUniquePtr);
 			assert(bucketUniquePtr.get());
 			
-			EqualityBucket<T>* newBucketPtr = new EqualityBucket<T>(*bucketUniquePtr);
+			EqualityBucket* newBucketPtr = new EqualityBucket(*bucketUniquePtr);
 			buckets.emplace(newBucketPtr);
 
 			oldToNewPtr.emplace(bucketUniquePtr.get(), newBucketPtr);
 		}
 
 		// set successors to point to new copies
-		for (const std::unique_ptr<EqualityBucket<T>>& bucketUniquePtr : buckets)
+		for (const std::unique_ptr<EqualityBucket>& bucketUniquePtr : buckets)
 			bucketUniquePtr->substitueAll(oldToNewPtr);
 
 		// set map to use new copies
@@ -203,7 +202,7 @@ public:
 	}
 
 	void add(const T& val) {
-		EqualityBucket<T>* newBucketPtr = new EqualityBucket<T>;
+		EqualityBucket* newBucketPtr = new EqualityBucket;
 		buckets.emplace(newBucketPtr);
 		mapToBucket.emplace(val, newBucketPtr);
 	}
@@ -211,7 +210,7 @@ public:
 	void setEqual(const T& lt, const T& rt) {
 
 		// DANGER defined duplicitly (already in subtreeContains)
-		using BucketPtr = EqualityBucket<T>*;
+		using BucketPtr = EqualityBucket*;
 		using BucketPtrSet = std::set<BucketPtr>;
 		using Frame = std::tuple<BucketPtr, typename BucketPtrSet::iterator, bool>;
 
@@ -221,8 +220,8 @@ public:
 		assert(! isLesser(lt, rt));
 		assert(! isLesser(rt, lt));
 
-		EqualityBucket<T>* newBucketPtr = mapToBucket.at(lt);
-		EqualityBucket<T>* oldBucketPtr = mapToBucket.at(rt);
+		EqualityBucket* newBucketPtr = mapToBucket.at(lt);
+		EqualityBucket* oldBucketPtr = mapToBucket.at(rt);
 		
 		std::vector<BucketPtr> toMerge;
 
@@ -281,12 +280,12 @@ public:
 		assert(! isLesserEqual(rt, lt));
 		assert(! isLesser(rt, lt));
 
-		EqualityBucket<T>* ltBucketPtr = mapToBucket.at(lt);
-		EqualityBucket<T>* rtBucketPtr = mapToBucket.at(rt);
+		EqualityBucket* ltBucketPtr = mapToBucket.at(lt);
+		EqualityBucket* rtBucketPtr = mapToBucket.at(rt);
 
 		// handle lesserEqual specializing to lesser
 		if (isLesserEqual(lt, rt)) {
-			if (contains<EqualityBucket<T>*>(rtBucketPtr->lesserEqual, ltBucketPtr))
+			if (contains<EqualityBucket*>(rtBucketPtr->lesserEqual, ltBucketPtr))
 				rtBucketPtr->lesserEqual.erase(ltBucketPtr);
 			else
 				assert(0); // more buckets in between, can't decide this
@@ -309,15 +308,15 @@ public:
 			return;
 		}
 
-		EqualityBucket<T>* ltBucketPtr = mapToBucket.at(lt);
-		EqualityBucket<T>* rtBucketPtr = mapToBucket.at(rt);
+		EqualityBucket* ltBucketPtr = mapToBucket.at(lt);
+		EqualityBucket* rtBucketPtr = mapToBucket.at(rt);
 
 		rtBucketPtr->lesserEqual.insert(ltBucketPtr);
 		ltBucketPtr->parents.insert(rtBucketPtr);
 	}
 
 	void unsetRelations(const T& val) {
-		EqualityBucket<T>* valBucketPtr = mapToBucket.at(val);
+		EqualityBucket* valBucketPtr = mapToBucket.at(val);
 		
 		bool onlyReference = true;
 		for (auto& pair : mapToBucket) {
@@ -333,7 +332,7 @@ public:
 			add(val);
 		} else {
 			// overconnect parents to children
-			for (EqualityBucket<T>* parent : valBucketPtr->parents) {
+			for (EqualityBucket* parent : valBucketPtr->parents) {
 				parent->lesserEqual.insert(valBucketPtr->lesserEqual.begin(),
 										   valBucketPtr->lesserEqual.end());
 				parent->lesser.insert(valBucketPtr->lesser.begin(),
