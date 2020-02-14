@@ -49,26 +49,82 @@ class GraphAnalyzer {
 
     void analyze() {
         for (auto& pair : blockMapping) {
-
+            
         }
     }
 
-    void processOperation(VRLocation* source, VRLocation* target, VROp* op) {
+    bool processOperation(VRLocation* source, VRLocation* target, VROp* op) const {
         if (! target) return;
-
         assert(source && target && op);
 
-    if (op->isNoop()) {
-        return;
-    } else if (op->isInstruction()) {
-        processInstruction(source, target, static_cast<VRInstruction>(op).getInstruction());
-    } else { // op is assume
+        RelationsGraph<llvm::Instruction*> newGraph = source->rg;
+        
+        if (op->isInstruction()) {
+            processInstruction(newGraph, static_cast<VRInstruction *>(op).getInstruction());
+        } else if (op->isAssume()) { 
+            if (op->isAssumeBool())
+                processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op))
+            else // isAssumeEqual
+                processAssumeEqual(newGraph, static_cast<VRAssumeEqual *>(op))
+        } // else op is noop
 
+        // TODO handle loads
 
+        if (relationsEqual(newGraph, target->rg))
+            return false;
+        
+        target->rg.swap(newGraph);
+        return true;
+    }
 
+    void processInstruction(RelationsGraph& newGraph, llvm::Instruction* inst) {
 
     }
 
+    void processAssumeBool(RelationsGraph& newGraph, VRAssumeBool* assume) {
+        const llmv::ICmpInst* icmp = llvm::dyn_cast<ICmpInst>(assume->getValue());
+        assert(icmp);
+        bool assumption = assume->getAssumption();
+
+        const llvm::Value* op1 = icmp->getOperand(0);
+        const llvm::Value* op2 = icmp->getOperand(1);
+
+        switch (icmp->getSignedPredicate()) {
+            case ICmpInst::Predicate::ICMP_EQ:
+                newGraph.setEqual(op1, op2); break;
+
+            case ICmpInst::Predicate::ICMP_NE:
+                break; // DANGER, no information doesn't mean nonequal
+
+            case ICmpInst::Predicate::ICMP_ULE:
+            case ICmpInst::Predicate::ICMP_SLE:
+                newGraph.setLesserEqual(op1, op2); break;
+
+            case ICmpInst::Predicate::ICMP_ULT:
+            case ICmpInst::Predicate::ICMP_SLT:
+                newGraph.setLesser(op1, op2); break;
+
+            case ICmpInst::Predicate::ICMP_UGE:
+            case ICmpInst::Predicate::ICMP_SGE:
+                newGraph.setLesser(op2, op1); break;
+
+            case ICmpInst::Predicate::ICMP_UGT:
+            case ICmpInst::Predicate::ICMP_SGT:
+                newGraph.setLesserEqual(op2, op1); break;
+
+            default:
+#ifndef NDEBUG
+                errs() << "Unhandled predicate in" << *icmp << "\n";
+#endif
+                abort();
+        }
+    }
+
+    void processAssumeEqual(RelationsGraph& newGraph, VRAssumeEqual* assume) {
+        const llvm::Value* val1 = assume->getValue();
+        const llvm::Value* val2 = assume->getAssumption();
+        newGraph.setEqual(val1, val2);
+    }
 };
 
 } // namespace vr
