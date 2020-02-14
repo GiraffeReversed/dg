@@ -174,7 +174,7 @@ class RelationsGraph {
 	}
 
 	std::vector<T> getEqual(EqualityBucket* valBucket) const {
-		for (auto& valueToBucket : mapToBucket) {
+		for (const std::pair<T, EqualityBucket*>& valueToBucket : mapToBucket) {
 			if (valBucket == valueToBucket.second)
 				return getEqual(valueToBucket.first);
 		}
@@ -223,6 +223,30 @@ public:
 		swap(*this, other);
 
 		return *this;
+	}
+
+	friend bool relationsEqual(const RelationsGraph& lt, const RelationsGraph& rt) {
+		std::vector<T> ltVals = lt.getAllValues();
+        std::vector<T> rtVals = rt.getAllValues();
+
+        std::sort(ltVals.begin(), ltVals.end());
+        std::sort(rtVals.begin(), rtVals.end());
+
+        if (ltVals != rtVals) {
+            return false;
+        }
+
+        for (auto& fst : ltVals) {
+            for (auto& snd : ltVals) {
+                if ((lt.isEqual(fst, snd) && ! rt.isEqual(fst, snd)) ||
+				    (lt.isLesser(fst, snd) && ! rt.isLesser(fst, snd)) ||
+					(lt.isLesser(snd, fst) && ! rt.isLesser(snd, fst)) ||
+					(lt.isLesserEqual(fst, snd) && ! rt.isLesserEqual(fst, snd)) ||
+					(lt.isLesserEqual(snd, fst) && ! rt.isLesserEqual(snd, fst)))
+					return false;
+            }
+        }
+		return true;
 	}
 
 	void add(const T& val) {
@@ -415,6 +439,13 @@ public:
 			}
 		}
 		
+		return result;
+	}
+
+	std::vector<T> getAllValues() const {
+		std::vector<T> result;
+		for (auto& pair : mapToBucket)
+			result.push_back(pair.fst);
 		return result;
 	}
 
