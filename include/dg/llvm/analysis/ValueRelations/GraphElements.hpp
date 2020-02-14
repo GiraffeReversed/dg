@@ -62,7 +62,7 @@ struct VRInstruction : public VROp {
 struct VRAssume : public VROp {
     const llvm::Value* val;
 
-    const llvm::Value* getVal() const {
+    const llvm::Value* getValue() const {
         return val;
     }
 
@@ -125,7 +125,7 @@ struct VREdge {
 struct VRLocation  {
     const unsigned id;
 
-    dg::vr::RelationsGraph<const llvm::Instruction *> relations;
+    dg::vr::RelationsGraph<const llvm::Value *> relations;
     dg::vr::LoadsMap loads;
 
     std::vector<VREdge *> predecessors;

@@ -34,96 +34,102 @@ namespace dg {
 namespace analysis {
 namespace vr {
 
+using RelationsGraph = ::dg::vr::RelationsGraph<const llvm::Value*>;
+
 
 class GraphAnalyzer {
     const llvm::Module& module;
 
     // VRLocation corresponding to the state of the program BEFORE executing the instruction
-    std::map<const llvm::Instruction *, VRLocation *>& locationMapping;
-    std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping;
-
-    GraphAnalyzer(const llvm::Module& m,
-                  std::map<const llvm::Instruction *, VRLocation *>& locs,
-                  std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs)
-                  : module(m), locationMapping(locs), blockMapping(blcs) {}
-
-    void analyze() {
-        for (auto& pair : blockMapping) {
-            
-        }
-    }
+    const std::map<const llvm::Instruction *, VRLocation *>& locationMapping;
+    const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping;
 
     bool processOperation(VRLocation* source, VRLocation* target, VROp* op) const {
-        if (! target) return;
+        if (! target) return false;
         assert(source && target && op);
 
-        RelationsGraph<llvm::Instruction*> newGraph = source->rg;
+        RelationsGraph newGraph = source->relations;
         
         if (op->isInstruction()) {
-            processInstruction(newGraph, static_cast<VRInstruction *>(op).getInstruction());
+            processInstruction(newGraph, static_cast<VRInstruction *>(op)->getInstruction());
         } else if (op->isAssume()) { 
             if (op->isAssumeBool())
-                processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op))
+                processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op));
             else // isAssumeEqual
-                processAssumeEqual(newGraph, static_cast<VRAssumeEqual *>(op))
+                processAssumeEqual(newGraph, static_cast<VRAssumeEqual *>(op));
         } // else op is noop
 
         // TODO handle loads
 
-        if (relationsEqual(newGraph, target->rg))
+        if (relationsEqual(newGraph, target->relations))
             return false;
         
-        target->rg.swap(newGraph);
+        swap(target->relations, newGraph);
         return true;
     }
 
-    void processInstruction(RelationsGraph& newGraph, llvm::Instruction* inst) {
+    void processInstruction(RelationsGraph& newGraph, const llvm::Instruction* inst) const {
 
     }
 
-    void processAssumeBool(RelationsGraph& newGraph, VRAssumeBool* assume) {
-        const llmv::ICmpInst* icmp = llvm::dyn_cast<ICmpInst>(assume->getValue());
+    void processAssumeBool(RelationsGraph& newGraph, VRAssumeBool* assume) const {
+        const llvm::ICmpInst* icmp = llvm::dyn_cast<llvm::ICmpInst>(assume->getValue());
         assert(icmp);
         bool assumption = assume->getAssumption();
 
         const llvm::Value* op1 = icmp->getOperand(0);
         const llvm::Value* op2 = icmp->getOperand(1);
 
-        switch (icmp->getSignedPredicate()) {
-            case ICmpInst::Predicate::ICMP_EQ:
+        llvm::ICmpInst::Predicate pred = assumption ?
+                                         icmp->getSignedPredicate() : icmp->getInversePredicate();
+
+        switch (pred) {
+            case llvm::ICmpInst::Predicate::ICMP_EQ:
                 newGraph.setEqual(op1, op2); break;
 
-            case ICmpInst::Predicate::ICMP_NE:
+            case llvm::ICmpInst::Predicate::ICMP_NE:
                 break; // DANGER, no information doesn't mean nonequal
 
-            case ICmpInst::Predicate::ICMP_ULE:
-            case ICmpInst::Predicate::ICMP_SLE:
+            case llvm::ICmpInst::Predicate::ICMP_ULE:
+            case llvm::ICmpInst::Predicate::ICMP_SLE:
                 newGraph.setLesserEqual(op1, op2); break;
 
-            case ICmpInst::Predicate::ICMP_ULT:
-            case ICmpInst::Predicate::ICMP_SLT:
+            case llvm::ICmpInst::Predicate::ICMP_ULT:
+            case llvm::ICmpInst::Predicate::ICMP_SLT:
                 newGraph.setLesser(op1, op2); break;
 
-            case ICmpInst::Predicate::ICMP_UGE:
-            case ICmpInst::Predicate::ICMP_SGE:
+            case llvm::ICmpInst::Predicate::ICMP_UGE:
+            case llvm::ICmpInst::Predicate::ICMP_SGE:
                 newGraph.setLesser(op2, op1); break;
 
-            case ICmpInst::Predicate::ICMP_UGT:
-            case ICmpInst::Predicate::ICMP_SGT:
+            case llvm::ICmpInst::Predicate::ICMP_UGT:
+            case llvm::ICmpInst::Predicate::ICMP_SGT:
                 newGraph.setLesserEqual(op2, op1); break;
 
             default:
 #ifndef NDEBUG
-                errs() << "Unhandled predicate in" << *icmp << "\n";
+                llvm::errs() << "Unhandled predicate in" << *icmp << "\n";
 #endif
                 abort();
         }
     }
 
-    void processAssumeEqual(RelationsGraph& newGraph, VRAssumeEqual* assume) {
+    void processAssumeEqual(RelationsGraph& newGraph, VRAssumeEqual* assume) const {
         const llvm::Value* val1 = assume->getValue();
         const llvm::Value* val2 = assume->getAssumption();
         newGraph.setEqual(val1, val2);
+    }
+
+public:
+    GraphAnalyzer(const llvm::Module& m,
+                  std::map<const llvm::Instruction *, VRLocation *>& locs,
+                  std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs)
+                  : module(m), locationMapping(locs), blockMapping(blcs) {}
+
+    void analyze() const {
+        for (auto& pair : blockMapping) {
+
+        }
     }
 };
 
