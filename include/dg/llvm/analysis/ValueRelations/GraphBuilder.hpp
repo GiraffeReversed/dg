@@ -70,7 +70,7 @@ struct GraphBuilder {
             VRBBlock* succ = getVRBBlock(it.getCaseSuccessor());
             assert(succ);
 
-            auto op = std::unique_ptr<VROp>(new VRAssume(swtch->getCondition(), it.getCaseValue()));
+            auto op = std::unique_ptr<VROp>(new VRAssumeEqual(swtch->getCondition(), it.getCaseValue()));
             VREdge* edge = new VREdge(vrblock->last(), succ->first(), std::move(op));
             vrblock->last()->connect(std::unique_ptr<VREdge>(edge));
         }
@@ -96,13 +96,8 @@ struct GraphBuilder {
             VRBBlock* trueSucc = getVRBBlock(inst->getSuccessor(0));
             VRBBlock* falseSucc = getVRBBlock(inst->getSuccessor(1));
 
-            llvm::LLVMContext& context = inst->getContext();
-
-            llvm::Value* llvmTrue = llvm::ConstantInt::getTrue(context);
-            llvm::Value* llvmFalse = llvm::ConstantInt::getFalse(context);
-
-            auto trueOp = std::unique_ptr<VROp>(new VRAssume(inst->getCondition(), llvmTrue));
-            auto falseOp = std::unique_ptr<VROp>(new VRAssume(inst->getCondition(), llvmFalse));
+            auto trueOp = std::unique_ptr<VROp>(new VRAssumeBool(inst->getCondition(), true));
+            auto falseOp = std::unique_ptr<VROp>(new VRAssumeBool(inst->getCondition(), false));
 
             VREdge* trueEdge = new VREdge(vrblock->last(), trueSucc->first(), std::move(trueOp));
             VREdge* falseEdge = new VREdge(vrblock->last(), falseSucc->first(), std::move(falseOp));

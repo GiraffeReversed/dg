@@ -17,13 +17,15 @@ namespace vr {
 
 class VROp {
 protected:
-    enum class VROpType { INSTRUCTION, ASSUME, NOOP } type;
+    enum class VROpType { NOOP, INSTRUCTION, ASSUME_BOOL, ASSUME_EQUAL } type;
     VROp(VROpType t) : type(t) {}
 
 public:
-    bool isInstruction() const { return type == VROpType::INSTRUCTION; }
-    bool isAssume() const { return type == VROpType::ASSUME; }
     bool isNoop() const { return type == VROpType::NOOP; }
+    bool isInstruction() const { return type == VROpType::INSTRUCTION; }
+    bool isAssume() const { return isAssumeBool() || isAssumeEqual(); }
+    bool isAssumeBool() const { return type == VROpType::ASSUME_BOOL; }
+    bool isAssumeEqual() const { return type == VROpType::ASSUME_EQUAL; }
 
     virtual ~VROp() = default;
 
@@ -58,12 +60,38 @@ struct VRInstruction : public VROp {
 };
 
 struct VRAssume : public VROp {
+
+protected:
+    VRAssume(VROpType type)
+    : VROp(type) {}
+};
+
+struct VRAssumeBool : public VRAssume {
+    const llvm::Value* val;
+    bool assumption;
+
+    VRAssumeBool(const llvm::Value* v, bool b)
+        : VRAssume(VROpType::ASSUME_BOOL), val(v), assumption(b) {}
+
+    std::pair<const llvm::Value*, bool> getAssumption() const {
+        return { val, assumption };
+    }
+
+#ifndef NDEBUG
+    void dump() const override {
+        std::cout << "assuming " << debug::getValName(val)
+                  << " is " << (assumption ? "true" : "false");
+    }
+#endif
+};
+
+struct VRAssumeEqual : public VRAssume {
     std::pair<const llvm::Value*, const llvm::Value*> equals;
 
-    VRAssume(const llvm::Value* lt, const llvm::Value* rt)
-    : VROp(VROpType::ASSUME), equals(lt, rt) {}
+    VRAssumeEqual(const llvm::Value* lt, const llvm::Value* rt)
+        : VRAssume(VROpType::ASSUME_EQUAL), equals(lt, rt) {}
 
-    std::pair<const llvm::Value*, const llvm::Value*> getAssumption() const {
+    const std::pair<const llvm::Value*, const llvm::Value*>& getAssumption() const {
         return equals;
     }
 
