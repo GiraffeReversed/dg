@@ -59,39 +59,53 @@ struct VRInstruction : public VROp {
 #endif
 };
 
-struct VRAssumeBool : public VROp {
+struct VRAssume : public VROp {
     const llvm::Value* val;
+
+    const llvm::Value* getVal() const {
+        return val;
+    }
+
+protected:
+    VRAssume(VROpType type, const llvm::Value* v) : VROp(type), val(v) {}
+
+    void dump() const override {
+        std::cout << "assuming " << debug::getValName(val) << " is ";
+    }
+};
+
+struct VRAssumeBool : public VRAssume {
     bool assumption;
 
     VRAssumeBool(const llvm::Value* v, bool b)
-        : VROp(VROpType::ASSUME_BOOL), val(v), assumption(b) {}
+        : VRAssume(VROpType::ASSUME_BOOL, v), assumption(b) {}
 
-    std::pair<const llvm::Value*, bool> getAssumption() const {
-        return { val, assumption };
+    bool getAssumption() const {
+        return assumption;
     }
 
 #ifndef NDEBUG
     void dump() const override {
-        std::cout << "assuming " << debug::getValName(val)
-                  << " is " << (assumption ? "true" : "false");
+        VRAssume::dump();
+        std::cout << (assumption ? "true" : "false") << std::endl;
     }
 #endif
 };
 
-struct VRAssumeEqual : public VROp {
-    std::pair<const llvm::Value*, const llvm::Value*> equals;
+struct VRAssumeEqual : public VRAssume {
+    const llvm::Value* assumption;
 
-    VRAssumeEqual(const llvm::Value* lt, const llvm::Value* rt)
-        : VROp(VROpType::ASSUME_EQUAL), equals(lt, rt) {}
+    VRAssumeEqual(const llvm::Value* v, const llvm::Value* a)
+        : VRAssume(VROpType::ASSUME_EQUAL, v), assumption(a) {}
 
-    const std::pair<const llvm::Value*, const llvm::Value*>& getAssumption() const {
-        return equals;
+    const llvm::Value* getAssumption() const {
+        return assumption;
     }
 
 #ifndef NDEBUG
     void dump() const override {
-        std::cout << "assuming " << debug::getValName(equals.first)
-                  << " = " << debug::getValName(equals.second);
+        VRAssume::dump();
+        std::cout << debug::getValName(assumption) << std::endl;
     }
 #endif
 };
