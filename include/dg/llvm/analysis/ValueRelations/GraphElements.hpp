@@ -59,19 +59,12 @@ struct VRInstruction : public VROp {
 #endif
 };
 
-struct VRAssume : public VROp {
-
-protected:
-    VRAssume(VROpType type)
-    : VROp(type) {}
-};
-
-struct VRAssumeBool : public VRAssume {
+struct VRAssumeBool : public VROp {
     const llvm::Value* val;
     bool assumption;
 
     VRAssumeBool(const llvm::Value* v, bool b)
-        : VRAssume(VROpType::ASSUME_BOOL), val(v), assumption(b) {}
+        : VROp(VROpType::ASSUME_BOOL), val(v), assumption(b) {}
 
     std::pair<const llvm::Value*, bool> getAssumption() const {
         return { val, assumption };
@@ -85,11 +78,11 @@ struct VRAssumeBool : public VRAssume {
 #endif
 };
 
-struct VRAssumeEqual : public VRAssume {
+struct VRAssumeEqual : public VROp {
     std::pair<const llvm::Value*, const llvm::Value*> equals;
 
     VRAssumeEqual(const llvm::Value* lt, const llvm::Value* rt)
-        : VRAssume(VROpType::ASSUME_EQUAL), equals(lt, rt) {}
+        : VROp(VROpType::ASSUME_EQUAL), equals(lt, rt) {}
 
     const std::pair<const llvm::Value*, const llvm::Value*>& getAssumption() const {
         return equals;
