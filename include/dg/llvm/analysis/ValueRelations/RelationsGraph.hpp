@@ -11,7 +11,10 @@
 
 #include <cassert>
 
-#include <iostream>
+#ifndef NDEBUG
+    #include <iostream>
+	#include "getValName.h"
+#endif
 
 namespace {
 
@@ -144,6 +147,19 @@ class EqualityBucket {
 		substitueInSet<EqualityBucket*>(oldToNewPtr, parents);
 	}
 
+#ifndef NDEBUG
+    void dump(std::map<const EqualityBucket*, int> numbering) const {
+
+		for (const EqualityBucket* bucket : lesser) {
+			std::cout << numbering.at(bucket) << " < " << numbering.at(this) << std::endl;
+		}
+
+		for (const EqualityBucket* bucket : lesserEqual) {
+			std::cout << numbering.at(bucket) << " <= " << numbering.at(this) << std::endl;
+		}
+    }
+#endif
+
 };
 
 template <typename T>
@@ -155,6 +171,14 @@ class RelationsGraph {
 
 	bool areInGraph(const T& lt, const T& rt) const {
 		return contains(mapToBucket, lt) && contains(mapToBucket, rt);
+	}
+
+	std::vector<T> getEqual(EqualityBucket* valBucket) const {
+		for (auto& valueToBucket : mapToBucket) {
+			if (valBucket == valueToBucket.second)
+				return getEqual(valueToBucket.first);
+		}
+		assert(0);
 	}
 	
 public:
@@ -377,6 +401,23 @@ public:
 		const auto& rtEqBucket = mapToBucket.at(rt);
 		return rtEqBucket->subtreeContains(mapToBucket.at(lt), false).second;
 	}
+
+	std::vector<T> getEqual(const T& val) const {
+		const auto* valBucket = mapToBucket.at(val);
+		std::vector<T> result;
+
+		T other;
+		const EqualityBucket* otherBucket;
+		for (const auto& valueToBucket : mapToBucket) {
+			std::tie(other, otherBucket) = valueToBucket;
+			if (valBucket == otherBucket) {
+				result.push_back(other);
+			}
+		}
+		
+		return result;
+	}
+
 };
 
 } // namespace vr
