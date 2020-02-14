@@ -5,6 +5,7 @@
 #include <llvm/IR/Instructions.h>
 
 #include "RelationsGraph.hpp"
+#include "LoadsMap.hpp"
 
 #ifndef NDEBUG
 #include "getValName.h"
@@ -89,7 +90,8 @@ struct VREdge {
 struct VRLocation  {
     const unsigned id;
 
-    dg::vr::RelationsGraph<const llvm::Instruction *> rg;
+    dg::vr::RelationsGraph<const llvm::Instruction *> relations;
+    dg::vr::LoadsMap loads;
 
     std::vector<VREdge *> predecessors;
     std::vector<std::unique_ptr<VREdge>> successors;

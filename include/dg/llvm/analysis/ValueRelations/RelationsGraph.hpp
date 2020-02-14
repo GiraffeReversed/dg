@@ -166,7 +166,6 @@ template <typename T>
 class RelationsGraph {
 
     std::set<std::unique_ptr<EqualityBucket>> buckets;
-    std::map<T, T*> loads;
 	std::map<T, EqualityBucket*> mapToBucket;
 
 	bool areInGraph(const T& lt, const T& rt) const {
@@ -185,8 +184,7 @@ public:
 
 	RelationsGraph() = default;
 	
-	RelationsGraph(const RelationsGraph& other)
-		: loads(other.loads) {
+	RelationsGraph(const RelationsGraph& other) {
 
 		std::map<EqualityBucket*, EqualityBucket*> oldToNewPtr;
 
@@ -215,7 +213,6 @@ public:
 		using std::swap;
 
 		swap(first.buckets, second.buckets);
-		swap(first.loads, second.loads);
 		swap(first.mapToBucket, second.mapToBucket);
 	}
 
@@ -390,14 +387,6 @@ public:
 			// it severes all ties with the rest of the graph
 			valBucketPtr->disconnectAll();
 		}
-	}
-
-	void setLoad(const T& address, T& value) {
-		loads.emplace(address, &value);
-	}
-
-	void unsetLoad(const T& address) {
-		loads.erase(address);
 	}
 
 	bool isEqual(const T& lt, const T& rt) const {
