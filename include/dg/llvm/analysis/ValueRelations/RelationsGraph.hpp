@@ -418,6 +418,26 @@ public:
 		return result;
 	}
 
+#ifndef NDEBUG
+    void dump() const {
+		std::map<const EqualityBucket*, int> numbering;
+
+		int last_id = 0;
+		for (const auto& bucketPtr : buckets) {
+			numbering.emplace(bucketPtr.get(), ++last_id);
+
+			std::cout << last_id << " = { ";
+			for (const T& val : getEqual(bucketPtr.get()))
+				std::cout << debug::getValName(val) << "; ";
+			std::cout << " }" << std::endl;
+		}
+
+		for (const auto& bucketPtr : buckets) {
+			bucketPtr->dump(numbering);
+		}
+    }
+#endif
+
 };
 
 } // namespace vr
