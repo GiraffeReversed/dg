@@ -146,8 +146,8 @@ class GraphAnalyzer {
                       bool (RelationsGraph::*relates)(const llvm::Value*, const llvm::Value*) const) const {
                       // which is function pointer to isEqual, isLesser, or isLesserEqual
 
-        for (VREdge* predEdge : preds) {
-            RelationsGraph& predGraph = predEdge->source->relations;
+        for (const VREdge* predEdge : preds) {
+            const RelationsGraph& predGraph = predEdge->source->relations;
             if (! (predGraph.*relates)(fst, snd))
                 return false;
         }
@@ -179,17 +179,39 @@ class GraphAnalyzer {
         return andSwapIfChanged(location->relations, newGraph);
     }
 
-    bool mergeLoads(VRLocation* location) {
-        LoadsMap newLoads;
-        return false;
+    bool loadsInAll(const std::vector<VREdge*>& preds, const llvm::Value* value) const {
+        const llvm::Value* from = preds[0]->source->loads.getPtrByVal(value);
+        for (const VREdge* predEdge : preds) {
+            const LoadsMap& predLoads = predEdge->source->loads;
+            const RelationsGraph& predGraph = predEdge->source->relations;
+            if (! predGraph.isEqual(from, predLoads.getPtrByVal(value)))
+                // DANGER does it suffice that from equals to value's ptr (before instruction on edge)?
+                return false;
+        }
+        return true;
     }
 
-    bool andSwapIfChanged(RelationsGraph& oldGraph, RelationsGraph& newGraph) {
-        if (relationsEqual(oldGraph, newGraph))
-                return false;
+    bool mergeLoads(VRLocation* location) {
+        LoadsMap newLoads;
+
+        const std::vector<VREdge*>& preds = location->predecessors;
+        const std::map<const llvm::Value*, const llvm::Value*>& valuesMap = preds[0]->source->loads.getAllLoads();
+
+        for (const auto& valueFrom : valuesMap) {
+            if (loadsInAll(location->predecessors, valueFrom.first))
+                newLoads.setLoad(valueFrom.first, valueFrom.second);
+        }
+
+        return andSwapIfChanged(location->loads, newLoads); 
+    }
+
+    template <typename T>
+    bool andSwapIfChanged(T& oldThing, T& newThing) {
+        if (oldThing == newThing)
+            return false;
             
-            swap(oldGraph, newGraph);
-            return true;
+        swap(oldThing, newThing);
+        return true;
     }
 
 public:
