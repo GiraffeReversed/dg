@@ -37,7 +37,7 @@ namespace vr {
 
 class GraphAnalyzer {
 
-    using RelationsGraph = ::dg::vr::RelationsGraph<const llvm::Value*>;
+    using RelationsGraph = RelationsGraph<const llvm::Value*>;
 
     const llvm::Module& module;
 
@@ -45,7 +45,7 @@ class GraphAnalyzer {
     const std::map<const llvm::Instruction *, VRLocation *>& locationMapping;
     const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping;
 
-    bool processOperation(VRLocation* source, VRLocation* target, VROp* op) const {
+    bool processOperation(VRLocation* source, VRLocation* target, VROp* op) {
         if (! target) return false;
         assert(source && target && op);
 
@@ -62,14 +62,10 @@ class GraphAnalyzer {
 
         // TODO handle loads
 
-        if (relationsEqual(newGraph, target->relations))
-            return false;
-        
-        swap(target->relations, newGraph);
-        return true;
+        return andSwapIfChanged(target->relations, newGraph);
     }
 
-    void processInstruction(RelationsGraph& newGraph, const llvm::Instruction* inst) const {
+    void processInstruction(RelationsGraph& newGraph, const llvm::Instruction* inst) {
         switch(inst->getOpcode()) {
             case llvm::Instruction::Store:
                 //return R.add(inst->getOperand(1)->stripPointerCasts(), I->getOperand(0));
@@ -131,9 +127,9 @@ class GraphAnalyzer {
                 newGraph.setLesser(op2, op1); break;
 
             default:
-#ifndef NDEBUG
+        #ifndef NDEBUG
                 llvm::errs() << "Unhandled predicate in" << *icmp << "\n";
-#endif
+        #endif
                 abort();
         }
     }
@@ -144,8 +140,56 @@ class GraphAnalyzer {
         newGraph.setEqual(val1, val2);
     }
 
-    bool mergePredecessors(VRLocation* location) const {
+    bool relatesInAll(const std::vector<VREdge*>& preds,
+                      const llvm::Value* fst,
+                      const llvm::Value* snd,
+                      bool (RelationsGraph::*relates)(const llvm::Value*, const llvm::Value*) const) const {
+                      // which is function pointer to isEqual, isLesser, or isLesserEqual
+
+        for (VREdge* predEdge : preds) {
+            RelationsGraph& predGraph = predEdge->source->relations;
+            if (! (predGraph.*relates)(fst, snd))
+                return false;
+        }
+        return true;
+    }
+
+    bool mergeRelations(VRLocation* location) {
+        RelationsGraph newGraph;
+
+        const std::vector<VREdge*>& preds = location->predecessors;
+        std::vector<const llvm::Value*> values = preds[0]->source->relations.getAllValues();
+
+        for (const llvm::Value* fst : values) {
+            for (const llvm::Value* snd : values) {
+
+                if (relatesInAll(preds, fst, snd, &RelationsGraph::isEqual))
+                    newGraph.setEqual(fst, snd);
+                if (relatesInAll(preds, fst, snd, &RelationsGraph::isLesser))
+                    newGraph.setLesser(fst, snd);
+                if (relatesInAll(preds, snd, fst, &RelationsGraph::isLesser))
+                    newGraph.setLesser(snd, fst);
+                if (relatesInAll(preds, fst, snd, &RelationsGraph::isLesserEqual))
+                    newGraph.setLesserEqual(fst, snd);
+                if (relatesInAll(preds, snd, fst, &RelationsGraph::isLesserEqual))
+                    newGraph.setLesserEqual(snd, fst);
+            }
+        }
+
+        return andSwapIfChanged(location->relations, newGraph);
+    }
+
+    bool mergeLoads(VRLocation* location) {
+        LoadsMap newLoads;
         return false;
+    }
+
+    bool andSwapIfChanged(RelationsGraph& oldGraph, RelationsGraph& newGraph) {
+        if (relationsEqual(oldGraph, newGraph))
+                return false;
+            
+            swap(oldGraph, newGraph);
+            return true;
     }
 
 public:
@@ -154,14 +198,15 @@ public:
                   std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs)
                   : module(m), locationMapping(locs), blockMapping(blcs) {}
 
-    void analyze() const {
+    void analyze() {
         for (auto& pair : blockMapping) {
             auto& vrblockPtr = pair.second;
 
             for (auto& locationPtr : vrblockPtr->locations) {
-                if (locationPtr->predecessors.size() > 1)
-                    mergePredecessors(locationPtr.get());
-                else if (locationPtr->predecessors.size() == 1) {
+                if (locationPtr->predecessors.size() > 1) {
+                    mergeRelations(locationPtr.get());
+                    mergeLoads(locationPtr.get());
+                } else if (locationPtr->predecessors.size() == 1) {
                     VREdge* edge = locationPtr->predecessors[0];
                     processOperation(edge->source, edge->target, edge->op.get());
                 } // else no predecessors => nothing to be passed
