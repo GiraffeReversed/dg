@@ -19,7 +19,19 @@ class LoadsMap {
     std::map<const llvm::Value *, const llvm::Value *> loads;
 
 public:
-    void setLoad(const llvm::Value *from, const llvm::Value *val) {
+    friend bool operator==(const LoadsMap& lt, const LoadsMap& rt) {
+        return lt.loads == rt.loads;
+    }
+
+    friend bool operator!=(const LoadsMap& lt, const LoadsMap& rt) {
+        return ! (lt == rt);
+    }
+
+    friend void swap(LoadsMap& lt, LoadsMap& rt) {
+        lt.loads.swap(rt.loads);
+    }
+
+    void setLoad(const llvm::Value *val, const llvm::Value *from) {
         assert(val && from);
         loads.emplace(val, from);
     }
@@ -50,6 +62,10 @@ public:
         if (result == loads.end())
             return nullptr;
         return result->second;
+    }
+
+    const std::map<const llvm::Value*, const llvm::Value*>& getAllLoads() const {
+        return loads;
     }
 
 #ifndef NDEBUG

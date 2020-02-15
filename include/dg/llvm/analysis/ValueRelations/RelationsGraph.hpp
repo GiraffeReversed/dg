@@ -226,7 +226,7 @@ public:
 		return *this;
 	}
 
-	friend bool relationsEqual(const RelationsGraph& lt, const RelationsGraph& rt) {
+	friend bool operator==(const RelationsGraph& lt, const RelationsGraph& rt) {
 		std::vector<T> ltVals = lt.getAllValues();
         std::vector<T> rtVals = rt.getAllValues();
 
@@ -248,6 +248,10 @@ public:
             }
         }
 		return true;
+	}
+
+	friend bool operator!=(const RelationsGraph& lt, const RelationsGraph& rt) {
+		return ! (lt == rt);
 	}
 
 	void add(T val) {
