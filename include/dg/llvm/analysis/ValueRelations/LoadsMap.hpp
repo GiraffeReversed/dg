@@ -49,6 +49,10 @@ public:
         }
     }
 
+    void unsetAllLoadsByPtr(const llvm::Value* from) {
+        while (getValByPtr(from) != nullptr) unsetLoadByPtr(from);
+    }
+
     const llvm::Value* getValByPtr(const llvm::Value *from) const {
         for (const auto& pair : loads) {
             if (pair.second == from)
@@ -66,6 +70,10 @@ public:
 
     const std::map<const llvm::Value*, const llvm::Value*>& getAllLoads() const {
         return loads;
+    }
+
+    void clearAll() {
+        loads.clear();
     }
 
 #ifndef NDEBUG

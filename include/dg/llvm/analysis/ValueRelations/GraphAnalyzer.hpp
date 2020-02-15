@@ -50,9 +50,12 @@ class GraphAnalyzer {
         assert(source && target && op);
 
         RelationsGraph newGraph = source->relations;
+        LoadsMap newLoads = source->loads;
         
         if (op->isInstruction()) {
-            processInstruction(newGraph, static_cast<VRInstruction *>(op)->getInstruction());
+            const llvm::Instruction* inst = static_cast<VRInstruction *>(op)->getInstruction();
+            forgetInvalidated(source->relations, newLoads, inst);
+            processInstruction(newGraph, inst);
         } else if (op->isAssume()) { 
             if (op->isAssumeBool())
                 processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op));
@@ -60,9 +63,60 @@ class GraphAnalyzer {
                 processAssumeEqual(newGraph, static_cast<VRAssumeEqual *>(op));
         } // else op is noop
 
-        // TODO handle loads
+        return andSwapIfChanged(target->relations, newGraph) || andSwapIfChanged(target->loads, newLoads);
+    }
 
-        return andSwapIfChanged(target->relations, newGraph);
+    void forgetInvalidated(const RelationsGraph& graph, LoadsMap& loads, const llvm::Instruction* inst) const {
+        if (! inst->mayWriteToMemory() && ! inst->mayHaveSideEffects()) return;
+        // DIFF does not ingore some intrinsic insts
+
+        if (! llvm::isa<llvm::StoreInst>(inst)) {
+            // unable to presume anything about such instruction
+            loads.clearAll();
+            return;
+        }
+
+        auto store = llvm::dyn_cast<llvm::StoreInst>(inst);
+        const llvm::Value* memoryPtr = stripCastsAndGEPs(store->getOperand(0));
+        // TODO check against actual loads generation
+        // what if load information is stored about cast or gep?
+
+        if (! allocaOrEqual(memoryPtr, graph)) {
+            // we can't tell, where the instruction writes to
+            loads.clearAll();
+            return;
+        }
+
+        loads.unsetAllLoadsByPtr(memoryPtr);
+
+        // unset all loads whose origin is unknown
+        //   (since they may be aliases of written location)
+        for (const auto& valueFrom : loads.getAllLoads()) {
+            const llvm::Value* memoryPtr = valueFrom.second;
+            if (! memoryPtr) continue;
+
+            memoryPtr = stripCastsAndGEPs(memoryPtr);
+
+            if (! allocaOrEqual(memoryPtr, graph))
+                loads.unsetAllLoadsByPtr(memoryPtr);
+        }
+    }
+
+    const llvm::Value* stripCastsAndGEPs(const llvm::Value* memoryPtr) const {
+        memoryPtr = memoryPtr->stripPointerCasts();
+        while (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(memoryPtr)) {
+            memoryPtr = gep->getPointerOperand()->stripPointerCasts();
+        }
+        return memoryPtr;
+    }
+
+    bool allocaOrEqual(const llvm::Value* value, const RelationsGraph& graph) const {
+        if (llvm::isa<llvm::AllocaInst>(value)) return true;
+
+        for (auto equal : graph.getEqual(value)) {
+            if (llvm::isa<llvm::AllocaInst>(equal)) return true;
+        }
+        return false;
     }
 
     void processInstruction(RelationsGraph& newGraph, const llvm::Instruction* inst) {
