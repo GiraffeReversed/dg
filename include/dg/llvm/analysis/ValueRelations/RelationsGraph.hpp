@@ -45,10 +45,13 @@ typename std::set<std::unique_ptr<T>>::iterator findPtr(std::set<std::unique_ptr
 
 template <typename T>
 void substitueInSet(const std::map<T, T>& mapping, std::set<T>& set) {
+	std::set<T> newSet;
 
-	std::for_each(set.begin(), set.end(), [&mapping](const T& elem) { return mapping.at(elem); } );
+	for (auto& element : set) {
+		newSet.insert(mapping.at(element));
+	}
+	set.swap(newSet);
 }
-
 
 } // namespace
 
