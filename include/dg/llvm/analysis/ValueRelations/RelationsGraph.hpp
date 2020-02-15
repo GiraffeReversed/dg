@@ -247,6 +247,8 @@ public:
 	}
 
 	void add(const T& val) {
+		if (mapToBucket.find(val) != mapToBucket.end()) return;
+
 		EqualityBucket* newBucketPtr = new EqualityBucket;
 		buckets.emplace(newBucketPtr);
 		mapToBucket.emplace(val, newBucketPtr);
@@ -258,6 +260,9 @@ public:
 		using BucketPtr = EqualityBucket*;
 		using BucketPtrSet = std::set<BucketPtr>;
 		using Frame = std::tuple<BucketPtr, typename BucketPtrSet::iterator, bool>;
+
+		add(lt);
+		add(rt);
 
 		if (isEqual(lt, rt)) return;
 
@@ -318,6 +323,9 @@ public:
 
 	void setLesser(const T& lt, const T& rt) {
 
+		add(lt); assert(mapToBucket.find(lt) != mapToBucket.end());
+		add(rt); assert(mapToBucket.find(rt) != mapToBucket.end());
+
 		if (isLesser(lt, rt)) return;
 
 		// assert no conflicting relations
@@ -341,6 +349,9 @@ public:
 	}
 
 	void setLesserEqual(const T& lt, const T& rt) {
+
+		add(lt);
+		add(rt);
 
 		if (isLesserEqual(lt, rt) || isEqual(lt, rt) || isLesser(lt, rt)) return;
 
