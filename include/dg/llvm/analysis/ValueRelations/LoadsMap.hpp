@@ -11,6 +11,7 @@
 #endif
 
 namespace dg {
+namespace analysis {
 namespace vr {
 
 class LoadsMap {
@@ -62,6 +63,7 @@ public:
 };
 
 } // namespace vr
+} // namespace analysis
 } // namespace dg
 
 #endif // _DG_LLVM_LOADS_MAP_HPP_

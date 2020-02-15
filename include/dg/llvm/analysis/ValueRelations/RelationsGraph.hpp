@@ -56,6 +56,7 @@ void substitueInSet(const std::map<T, T>& mapping, std::set<T>& set) {
 } // namespace
 
 namespace dg {
+namespace analysis {
 namespace vr {
 
 class EqualityBucket {
@@ -475,6 +476,7 @@ public:
 };
 
 } // namespace vr
+} // namespace analysis
 } // namespace dg
 
 #endif // _DG_LLVM_RELATIONS_MAP_H_

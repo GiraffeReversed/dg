@@ -125,8 +125,8 @@ struct VREdge {
 struct VRLocation  {
     const unsigned id;
 
-    dg::vr::RelationsGraph<const llvm::Value *> relations;
-    dg::vr::LoadsMap loads;
+    RelationsGraph<const llvm::Value *> relations;
+    LoadsMap loads;
 
     std::vector<VREdge *> predecessors;
     std::vector<std::unique_ptr<VREdge>> successors;
