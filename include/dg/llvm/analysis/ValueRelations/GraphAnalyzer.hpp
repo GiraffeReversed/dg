@@ -34,10 +34,11 @@ namespace dg {
 namespace analysis {
 namespace vr {
 
-using RelationsGraph = ::dg::vr::RelationsGraph<const llvm::Value*>;
-
 
 class GraphAnalyzer {
+
+    using RelationsGraph = ::dg::vr::RelationsGraph<const llvm::Value*>;
+
     const llvm::Module& module;
 
     // VRLocation corresponding to the state of the program BEFORE executing the instruction
@@ -69,7 +70,30 @@ class GraphAnalyzer {
     }
 
     void processInstruction(RelationsGraph& newGraph, const llvm::Instruction* inst) const {
-
+        switch(inst->getOpcode()) {
+            case llvm::Instruction::Store:
+                //return R.add(inst->getOperand(1)->stripPointerCasts(), I->getOperand(0));
+            case llvm::Instruction::Load:
+                //return loadGen(cast<LoadInst>(I), E, Rel, R, source);
+            case llvm::Instruction::GetElementPtr:
+                //return gepGen(cast<GetElementPtrInst>(I), E, R, source);
+            case llvm::Instruction::ZExt:
+            case llvm::Instruction::SExt: // (S)ZExt should not change value
+                //return E.add(I, I->getOperand(0));
+            case llvm::Instruction::Add:
+                //return plusGen(I, source->equalities, E, Rel);
+            case llvm::Instruction::Sub:
+                //return minusGen(I, source->equalities, E, Rel);
+            case llvm::Instruction::Mul:
+                //return mulGen(I, E, Rel);
+            default:
+                /*if (auto C = dyn_cast<CastInst>(I)) {
+                    if (C->isLosslessCast() || C->isNoopCast(_M->getDataLayout())) {
+                        return E.add(C, C->getOperand(0));
+                    }
+                }*/
+                return;
+        }
     }
 
     void processAssumeBool(RelationsGraph& newGraph, VRAssumeBool* assume) const {
@@ -81,7 +105,7 @@ class GraphAnalyzer {
         const llvm::Value* op2 = icmp->getOperand(1);
 
         llvm::ICmpInst::Predicate pred = assumption ?
-                                         icmp->getSignedPredicate() : icmp->getInversePredicate();
+            icmp->getSignedPredicate() : icmp->getInversePredicate();
 
         switch (pred) {
             case llvm::ICmpInst::Predicate::ICMP_EQ:
@@ -100,11 +124,11 @@ class GraphAnalyzer {
 
             case llvm::ICmpInst::Predicate::ICMP_UGE:
             case llvm::ICmpInst::Predicate::ICMP_SGE:
-                newGraph.setLesser(op2, op1); break;
+                newGraph.setLesserEqual(op2, op1); break;
 
             case llvm::ICmpInst::Predicate::ICMP_UGT:
             case llvm::ICmpInst::Predicate::ICMP_SGT:
-                newGraph.setLesserEqual(op2, op1); break;
+                newGraph.setLesser(op2, op1); break;
 
             default:
 #ifndef NDEBUG
@@ -120,6 +144,10 @@ class GraphAnalyzer {
         newGraph.setEqual(val1, val2);
     }
 
+    bool mergePredecessors(VRLocation* location) const {
+        return false;
+    }
+
 public:
     GraphAnalyzer(const llvm::Module& m,
                   std::map<const llvm::Instruction *, VRLocation *>& locs,
@@ -128,6 +156,16 @@ public:
 
     void analyze() const {
         for (auto& pair : blockMapping) {
+            auto& vrblockPtr = pair.second;
+
+            for (auto& locationPtr : vrblockPtr->locations) {
+                if (locationPtr->predecessors.size() > 1)
+                    mergePredecessors(locationPtr.get());
+                else if (locationPtr->predecessors.size() == 1) {
+                    VREdge* edge = locationPtr->predecessors[0];
+                    processOperation(edge->source, edge->target, edge->op.get());
+                } // else no predecessors => nothing to be passed
+            }
 
         }
     }
