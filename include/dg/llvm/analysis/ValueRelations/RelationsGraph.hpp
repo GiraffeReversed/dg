@@ -171,7 +171,7 @@ class RelationsGraph {
     std::set<std::unique_ptr<EqualityBucket>> buckets;
 	std::map<T, EqualityBucket*> mapToBucket;
 
-	bool areInGraph(const T& lt, const T& rt) const {
+	bool areInGraph(T lt, T rt) const {
 		return contains(mapToBucket, lt) && contains(mapToBucket, rt);
 	}
 
@@ -249,7 +249,7 @@ public:
 		return true;
 	}
 
-	void add(const T& val) {
+	void add(T val) {
 		if (mapToBucket.find(val) != mapToBucket.end()) return;
 
 		EqualityBucket* newBucketPtr = new EqualityBucket;
@@ -257,7 +257,7 @@ public:
 		mapToBucket.emplace(val, newBucketPtr);
 	}
 
-	void setEqual(const T& lt, const T& rt) {
+	void setEqual(T lt, T rt) {
 
 		// DANGER defined duplicitly (already in subtreeContains)
 		using BucketPtr = EqualityBucket*;
@@ -324,7 +324,7 @@ public:
 		}
 	}
 
-	void setLesser(const T& lt, const T& rt) {
+	void setLesser(T lt, T rt) {
 
 		add(lt); assert(mapToBucket.find(lt) != mapToBucket.end());
 		add(rt); assert(mapToBucket.find(rt) != mapToBucket.end());
@@ -351,7 +351,7 @@ public:
 		ltBucketPtr->parents.insert(rtBucketPtr);
 	}
 
-	void setLesserEqual(const T& lt, const T& rt) {
+	void setLesserEqual(T lt, T rt) {
 
 		add(lt);
 		add(rt);
@@ -374,7 +374,7 @@ public:
 		ltBucketPtr->parents.insert(rtBucketPtr);
 	}
 
-	void unsetRelations(const T& val) {
+	void unsetRelations(T val) {
 		EqualityBucket* valBucketPtr = mapToBucket.at(val);
 		
 		bool onlyReference = true;
@@ -403,7 +403,7 @@ public:
 		}
 	}
 
-	bool isEqual(const T& lt, const T& rt) const {
+	bool isEqual(T lt, T rt) const {
 
 		if (! areInGraph(lt, rt))
 			return false;
@@ -411,7 +411,7 @@ public:
 		return mapToBucket.at(lt) == mapToBucket.at(rt);
 	}
 
-	bool isLesser(const T& lt, const T& rt) const {
+	bool isLesser(T lt, T rt) const {
 
 		if (! areInGraph(lt, rt))
 			return false;
@@ -420,7 +420,7 @@ public:
 		return rtEqBucket->subtreeContains(mapToBucket.at(lt), true).second;
 	}
 
-	bool isLesserEqual(const T& lt, const T& rt) const {
+	bool isLesserEqual(T lt, T rt) const {
 
 		if (! areInGraph(lt, rt))
 			return false;
@@ -429,7 +429,7 @@ public:
 		return rtEqBucket->subtreeContains(mapToBucket.at(lt), false).second;
 	}
 
-	std::vector<T> getEqual(const T& val) const {
+	std::vector<T> getEqual(T val) const {
 		const auto* valBucket = mapToBucket.at(val);
 		std::vector<T> result;
 
@@ -461,7 +461,7 @@ public:
 			numbering.emplace(bucketPtr.get(), ++last_id);
 
 			std::cout << last_id << " = { ";
-			for (const T& val : getEqual(bucketPtr.get()))
+			for (T val : getEqual(bucketPtr.get()))
 				std::cout << debug::getValName(val) << "; ";
 			std::cout << " }" << std::endl;
 		}
