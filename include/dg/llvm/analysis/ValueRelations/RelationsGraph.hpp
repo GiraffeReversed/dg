@@ -435,8 +435,10 @@ public:
 	}
 
 	std::vector<T> getEqual(T val) const {
-		const auto* valBucket = mapToBucket.at(val);
 		std::vector<T> result;
+		if (mapToBucket.find(val) == mapToBucket.end()) return result;
+		
+		const auto* valBucket = mapToBucket.at(val);
 
 		T other;
 		const EqualityBucket* otherBucket;
