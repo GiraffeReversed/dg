@@ -55,7 +55,7 @@ class GraphAnalyzer {
         if (op->isInstruction()) {
             const llvm::Instruction* inst = static_cast<VRInstruction *>(op)->getInstruction();
             forgetInvalidated(source->relations, newLoads, inst);
-            processInstruction(newGraph, inst);
+            processInstruction(newGraph, newLoads, inst);          
         } else if (op->isAssume()) { 
             if (op->isAssumeBool())
                 processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op));
@@ -63,7 +63,7 @@ class GraphAnalyzer {
                 processAssumeEqual(newGraph, static_cast<VRAssumeEqual *>(op));
         } // else op is noop
 
-        return andSwapIfChanged(target->relations, newGraph) || andSwapIfChanged(target->loads, newLoads);
+        return andSwapIfChanged(target->relations, newGraph) | andSwapIfChanged(target->loads, newLoads);
     }
 
     void forgetInvalidated(const RelationsGraph& graph, LoadsMap& loads, const llvm::Instruction* inst) const {
@@ -77,7 +77,7 @@ class GraphAnalyzer {
         }
 
         auto store = llvm::dyn_cast<llvm::StoreInst>(inst);
-        const llvm::Value* memoryPtr = stripCastsAndGEPs(store->getOperand(0));
+        const llvm::Value* memoryPtr = stripCastsAndGEPs(store->getPointerOperand());
         // TODO check against actual loads generation
         // what if load information is stored about cast or gep?
 
@@ -91,9 +91,8 @@ class GraphAnalyzer {
 
         // unset all loads whose origin is unknown
         //   (since they may be aliases of written location)
-        for (const auto& valueFrom : loads.getAllLoads()) {
-            const llvm::Value* memoryPtr = valueFrom.second;
-            if (! memoryPtr) continue;
+        for (const auto& fromValues : loads.getAllLoads()) {
+            const llvm::Value* memoryPtr = fromValues.first;
 
             memoryPtr = stripCastsAndGEPs(memoryPtr);
 
@@ -119,10 +118,11 @@ class GraphAnalyzer {
         return false;
     }
 
-    void processInstruction(RelationsGraph& newGraph, const llvm::Instruction* inst) {
+    void processInstruction(RelationsGraph& newGraph, LoadsMap& newLoads, const llvm::Instruction* inst) {
         switch(inst->getOpcode()) {
             case llvm::Instruction::Store:
-                //return R.add(inst->getOperand(1)->stripPointerCasts(), I->getOperand(0));
+                newLoads.setLoad(inst->getOperand(0), inst->getOperand(1)->stripPointerCasts());
+                break;
             case llvm::Instruction::Load:
                 //return loadGen(cast<LoadInst>(I), E, Rel, R, source);
             case llvm::Instruction::GetElementPtr:
@@ -233,8 +233,7 @@ class GraphAnalyzer {
         return andSwapIfChanged(location->relations, newGraph);
     }
 
-    bool loadsInAll(const std::vector<VREdge*>& preds, const llvm::Value* value) const {
-        const llvm::Value* from = preds[0]->source->loads.getPtrByVal(value);
+    bool loadsInAll(const std::vector<VREdge*>& preds, const llvm::Value* from, const llvm::Value* value) const {
         for (const VREdge* predEdge : preds) {
             const LoadsMap& predLoads = predEdge->source->loads;
             const RelationsGraph& predGraph = predEdge->source->relations;
@@ -249,11 +248,13 @@ class GraphAnalyzer {
         LoadsMap newLoads;
 
         const std::vector<VREdge*>& preds = location->predecessors;
-        const std::map<const llvm::Value*, const llvm::Value*>& valuesMap = preds[0]->source->loads.getAllLoads();
+        const auto& valuesMap = preds[0]->source->loads.getAllLoads();
 
-        for (const auto& valueFrom : valuesMap) {
-            if (loadsInAll(location->predecessors, valueFrom.first))
-                newLoads.setLoad(valueFrom.first, valueFrom.second);
+        for (const auto& fromValues : valuesMap) {
+            for (const llvm::Value* value : fromValues.second) {
+                if (loadsInAll(location->predecessors, fromValues.first, value))
+                    newLoads.setLoad(value, fromValues.first);
+            }
         }
 
         return andSwapIfChanged(location->loads, newLoads); 
