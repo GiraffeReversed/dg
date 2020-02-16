@@ -15,8 +15,8 @@ namespace analysis {
 namespace vr {
 
 class LoadsMap {
-    // pair (a,b) such that a = load b in the future
-    std::map<const llvm::Value *, const llvm::Value *> loads;
+    // pair (a,b) such that any of b = load a in the future
+    std::map<const llvm::Value *, std::set<const llvm::Value *>> loads;
 
 public:
     friend bool operator==(const LoadsMap& lt, const LoadsMap& rt) {
@@ -33,10 +33,22 @@ public:
 
     void setLoad(const llvm::Value *val, const llvm::Value *from) {
         assert(val && from);
-        loads.emplace(val, from);
+
+        auto found = loads.find(from);
+        if (found != loads.end()) {
+            found->second.insert(val);
+            return;
+        }
+
+        std::set<const llvm::Value*> temp;
+        temp.insert(val);
+        loads.emplace(from, std::move(temp));
     }
 
-    void unsetLoadByVal(const llvm::Value* val) {
+    /*void unsetLoadByVal(const llvm::Value* val) {
+        for (auto& pair : loads) {
+
+        }
         assert(val);
         loads.erase(val);
     }
@@ -47,28 +59,24 @@ public:
             if (from == pair.second)
                 loads.erase(pair.first);
         }
-    }
+    }*/
 
     void unsetAllLoadsByPtr(const llvm::Value* from) {
-        while (getValByPtr(from) != nullptr) unsetLoadByPtr(from);
+        loads.erase(from);
     }
 
     const llvm::Value* getValByPtr(const llvm::Value *from) const {
+        return *(loads.find(from)->second.begin());
+    }
+
+    const llvm::Value* getPtrByVal(const llvm::Value* val) const {
         for (const auto& pair : loads) {
-            if (pair.second == from)
-                return pair.first;
+            if (pair.second.find(val) != pair.second.end()) return pair.first;
         }
         return nullptr;
     }
 
-    const llvm::Value* getPtrByVal(const llvm::Value* val) const {
-        auto result = loads.find(val);
-        if (result == loads.end())
-            return nullptr;
-        return result->second;
-    }
-
-    const std::map<const llvm::Value*, const llvm::Value*>& getAllLoads() const {
+    const std::map<const llvm::Value*, std::set<const llvm::Value*>>& getAllLoads() const {
         return loads;
     }
 
@@ -79,8 +87,11 @@ public:
 #ifndef NDEBUG
     void dump() const {
         for (const auto& pair : loads) {
-            std::cout << debug::getValName(pair.first) << " = load "
-                      << debug::getValName(pair.second);
+            std::cout << "{ ";
+            for (const llvm::Value* val : pair.second) {
+                std::cout << debug::getValName(val) << ", ";
+            }
+            std::cout << "} = load (" << debug::getValName(pair.first) << ")" << std::endl;
         }
     }
 #endif // NDEBUG
