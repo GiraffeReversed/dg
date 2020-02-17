@@ -47,7 +47,9 @@ void substitueInSet(const std::map<T, T>& mapping, std::set<T>& set) {
 	std::set<T> newSet;
 
 	for (auto& element : set) {
-		newSet.insert(mapping.at(element));
+		if (contains(mapping, element))
+			newSet.insert(mapping.at(element));
+		else newSet.insert(element);
 	}
 	set.swap(newSet);
 }
@@ -163,20 +165,6 @@ class EqualityBucket {
 		substitueInSet<EqualityBucket*>(oldToNewPtr, lesser);
 		substitueInSet<EqualityBucket*>(oldToNewPtr, parents);
 	}
-
-#ifndef NDEBUG
-    void dump(std::map<const EqualityBucket*, int> numbering) const {
-
-		for (const EqualityBucket* bucket : lesser) {
-			std::cout << numbering.at(bucket) << " < " << numbering.at(this) << std::endl;
-		}
-
-		for (const EqualityBucket* bucket : lesserEqual) {
-			std::cout << numbering.at(bucket) << " <= " << numbering.at(this) << std::endl;
-		}
-    }
-#endif
-
 };
 
 template <typename T>
@@ -346,7 +334,7 @@ public:
 
 			oldBucketPtr = *it;
 
-			// replace values' pointers to right with pointers to left
+			// replace mapToBucket info to regard only remaining bucket
 			for (auto& pair : mapToBucket) {
 				if (pair.second == oldBucketPtr)
 					pair.second = newBucketPtr;
@@ -367,10 +355,10 @@ public:
 
 			// remove right
 			auto ite = findPtr(buckets, oldBucketPtr);
-			if (ite != buckets.end()) {
-				oldBucketPtr->disconnectAll();
-				buckets.erase(ite);
-			}
+			assert (ite != buckets.end());
+			
+			oldBucketPtr->disconnectAll();
+			buckets.erase(ite);
 		}
 	}
 
@@ -575,25 +563,90 @@ public:
 	}
 
 #ifndef NDEBUG
-    void dump() const {
-		std::map<const EqualityBucket*, int> numbering;
-
-		int last_id = 0;
-		for (const auto& bucketPtr : buckets) {
-			numbering.emplace(bucketPtr.get(), ++last_id);
-
-			std::cout << last_id << " = { ";
-			for (T val : getEqual(bucketPtr.get()))
-				std::cout << debug::getValName(val) << "; ";
-			std::cout << " }" << std::endl;
+	std::string strip(std::string str) const {
+		std::string result;
+		int space_counter = 0;
+		for (char c : str) {
+			if (c != ' ' || ++space_counter <= 4) {
+				result += c;
+			} else break;
 		}
+		return result;
+	}
+
+	void printVals(std::ostream& stream, const std::vector<T>& vals) const {
+		stream << "{ ";
+		for (auto val : vals) {
+			stream << strip(debug::getValName(val)) << "; ";
+		}
+		stream << " }";
+	}
+
+	void printInterleaved(std::ostream& stream, const std::vector<T>& v1,
+						  std::string sep, const std::vector<T>& v2) const {
+		printVals(stream, v1);
+		stream << sep;
+		printVals(stream, v2);
+		stream << std::endl;
+	}
+
+	void dump() {
+		generalDump(std::cout);
+	}
+
+	void ddump() {
+		//std::cerr << "debug dumping graph" << std::endl;
+		generalDump(std::cerr);
+		//std::cerr << std::endl;
+	}
+
+	void ddump(EqualityBucket* bucket) {
+		//std::cerr << "debug dumping bucket" << std::endl;
+		dump(std::cerr, bucket);
+		//std::cerr << std::endl;
+	}
+
+	void ddump(const llvm::Value* val) {
+		if (! inGraph(val)) {
+			std::cerr << "NIG" << debug::getValName(val) << std::endl << std::endl;
+			return;
+		}
+		std::cerr << debug::getValName(val) << ":" << std::endl;
+		dump(std::cerr, mapToBucket.at(val));
+		std::cerr << std::endl;
+	}
+
+	void dump(std::ostream& stream, EqualityBucket* bucket) {
+		const auto& values = getEqual(bucket);
+
+		for (auto ptr : bucket->lesser)
+			printInterleaved(stream, getEqual(ptr), " < ", values);
+
+		for (auto ptr : bucket->lesserEqual)
+			printInterleaved(stream, getEqual(ptr), " <= ", values);
+
+		EqualityBucket* foundValue = findByKey(loads, bucket);
+		//if (foundValue)
+		//	printInterleaved(stream, getEqual(foundValue), " = LOAD ", values);
+
+		EqualityBucket* foundKey = findByValue(loads, bucket);
+		if (foundKey)
+			printInterleaved(stream, values, " = LOAD ", getEqual(foundKey));
+
+		if (bucket->lesser.empty() // values just equal and nothing else
+				&& bucket->lesserEqual.empty()
+				&& bucket->parents.empty()
+				&& ! findByValue(loads, bucket)
+				&& ! foundValue) {
+			printVals(stream, values);
+			stream << std::endl;
+		}
+	}
+
+    void generalDump(std::ostream& stream) {
 
 		for (const auto& bucketPtr : buckets) {
-			bucketPtr->dump(numbering);
-		}
-
-		for (const auto& bucketPair : loads) {
-			std::cout << numbering[bucketPair.second] << " = load " << numbering[bucketPair.first] << std::endl;
+			dump(stream, bucketPtr.get());
 		}
     }
 #endif
