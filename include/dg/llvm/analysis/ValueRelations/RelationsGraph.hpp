@@ -353,6 +353,17 @@ public:
 			// make successors and parents of right belong to left too
 			newBucketPtr->merge(*oldBucketPtr);
 
+			for (EqualityBucket* parent : oldBucketPtr->parents) {
+				if (contains(parent->lesser, oldBucketPtr)) {
+					parent->lesser.erase(oldBucketPtr);
+					parent->lesser.insert(newBucketPtr);
+				} else if (contains(parent->lesserEqual, oldBucketPtr)) {
+					parent->lesserEqual.erase(oldBucketPtr);
+					parent->lesserEqual.insert(newBucketPtr);
+				} else assert(0); // was parent so it must have had been lesser or lesserEqual
+				newBucketPtr->parents.insert(parent);
+			}
+
 			// remove right
 			auto ite = findPtr(buckets, oldBucketPtr);
 			assert (ite != buckets.end());
@@ -597,7 +608,7 @@ public:
 	void ddump() {
 		//std::cerr << "debug dumping graph" << std::endl;
 		generalDump(std::cerr);
-		//std::cerr << std::endl;
+		std::cerr << std::endl;
 	}
 
 	void ddump(EqualityBucket* bucket) {
@@ -625,13 +636,13 @@ public:
 		for (auto ptr : bucket->lesserEqual)
 			printInterleaved(stream, getEqual(ptr), " <= ", values);
 
-		EqualityBucket* foundValue = findByKey(loads, bucket);
-		//if (foundValue)
-		//	printInterleaved(stream, getEqual(foundValue), " = LOAD ", values);
-
 		EqualityBucket* foundKey = findByValue(loads, bucket);
-		if (foundKey)
-			printInterleaved(stream, values, " = LOAD ", getEqual(foundKey));
+		//if (foundKey)
+		//	printInterleaved(stream, values, " = LOAD ", getEqual(foundKey));
+
+		EqualityBucket* foundValue = findByKey(loads, bucket);
+		if (foundValue && !foundKey)
+			printInterleaved(stream, getEqual(foundValue), " = LOAD ", values);
 
 		if (bucket->lesser.empty() // values just equal and nothing else
 				&& bucket->lesserEqual.empty()
