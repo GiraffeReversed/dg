@@ -50,12 +50,11 @@ class GraphAnalyzer {
         assert(source && target && op);
 
         RelationsGraph newGraph = source->relations;
-        LoadsMap newLoads = source->loads;
         
         if (op->isInstruction()) {
             const llvm::Instruction* inst = static_cast<VRInstruction *>(op)->getInstruction();
-            forgetInvalidated(source->relations, newLoads, inst);
-            processInstruction(newGraph, newLoads, inst);          
+            forgetInvalidated(source->relations, inst);
+            processInstruction(newGraph, inst);          
         } else if (op->isAssume()) { 
             if (op->isAssumeBool())
                 processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op));
@@ -63,16 +62,16 @@ class GraphAnalyzer {
                 processAssumeEqual(newGraph, static_cast<VRAssumeEqual *>(op));
         } // else op is noop
 
-        return andSwapIfChanged(target->relations, newGraph) | andSwapIfChanged(target->loads, newLoads);
+        return andSwapIfChanged(target->relations, newGraph);
     }
 
-    void forgetInvalidated(const RelationsGraph& graph, LoadsMap& loads, const llvm::Instruction* inst) const {
+    void forgetInvalidated(RelationsGraph& graph, const llvm::Instruction* inst) const {
         if (! inst->mayWriteToMemory() && ! inst->mayHaveSideEffects()) return;
-        // DIFF does not ingore some intrinsic insts
+        // DIFF does not ignore some intrinsic insts
 
         if (! llvm::isa<llvm::StoreInst>(inst)) {
             // unable to presume anything about such instruction
-            loads.clearAll();
+            graph.unsetAllLoads();
             return;
         }
 
@@ -81,23 +80,20 @@ class GraphAnalyzer {
         // TODO check against actual loads generation
         // what if load information is stored about cast or gep?
 
-        if (! allocaOrEqual(memoryPtr, graph)) {
+        if (! eqivToAlloca(graph.getEqual(memoryPtr))) {
             // we can't tell, where the instruction writes to
-            loads.clearAll();
+            graph.unsetAllLoads();
             return;
         }
 
-        loads.unsetAllLoadsByPtr(memoryPtr);
+        graph.unsetAllLoadsByPtr(memoryPtr);
 
         // unset all loads whose origin is unknown
         //   (since they may be aliases of written location)
-        for (const auto& fromValues : loads.getAllLoads()) {
-            const llvm::Value* memoryPtr = fromValues.first;
+        for (const auto& fromsValues : graph.getAllLoads()) {
 
-            memoryPtr = stripCastsAndGEPs(memoryPtr);
-
-            if (! allocaOrEqual(memoryPtr, graph))
-                loads.unsetAllLoadsByPtr(memoryPtr);
+            if (! eqivToAlloca(fromsValues.first))
+                graph.unsetAllLoadsByPtr(fromsValues.first[0]); // aka first memoryPtr of bucket
         }
     }
 
@@ -109,27 +105,34 @@ class GraphAnalyzer {
         return memoryPtr;
     }
 
-    bool allocaOrEqual(const llvm::Value* value, const RelationsGraph& graph) const {
-        if (llvm::isa<llvm::AllocaInst>(value)) return true;
-
-        for (auto equal : graph.getEqual(value)) {
-            if (llvm::isa<llvm::AllocaInst>(equal)) return true;
+    bool eqivToAlloca(const std::vector<const llvm::Value*>& froms) const {
+        for (auto memoryPtr : froms) {
+            memoryPtr = stripCastsAndGEPs(memoryPtr);
+            if (llvm::isa<llvm::AllocaInst>(memoryPtr)) return true;
         }
         return false;
     }
 
-    void processInstruction(RelationsGraph& newGraph, LoadsMap& newLoads, const llvm::Instruction* inst) {
+    void storeGen(RelationsGraph& graph, const llvm::StoreInst* store) {
+        graph.setLoad(store->getValueOperand(), store->getPointerOperand()->stripPointerCasts());
+    }
+
+    void loadGen(RelationsGraph& graph, const llvm::LoadInst* load) {
+
+    }
+
+    void processInstruction(RelationsGraph& graph, const llvm::Instruction* inst) {
         switch(inst->getOpcode()) {
             case llvm::Instruction::Store:
-                newLoads.setLoad(inst->getOperand(0), inst->getOperand(1)->stripPointerCasts());
-                break;
+                return storeGen(graph, llvm::dyn_cast<llvm::StoreInst>(inst));
             case llvm::Instruction::Load:
-                //return loadGen(cast<LoadInst>(I), E, Rel, R, source);
+                return loadGen(graph, llvm::dyn_cast<llvm::LoadInst>(inst));
             case llvm::Instruction::GetElementPtr:
                 //return gepGen(cast<GetElementPtrInst>(I), E, R, source);
+                break;
             case llvm::Instruction::ZExt:
             case llvm::Instruction::SExt: // (S)ZExt should not change value
-                //return E.add(I, I->getOperand(0));
+                return graph.setEqual(inst, inst->getOperand(0));
             case llvm::Instruction::Add:
                 //return plusGen(I, source->equalities, E, Rel);
             case llvm::Instruction::Sub:
@@ -235,9 +238,8 @@ class GraphAnalyzer {
 
     bool loadsInAll(const std::vector<VREdge*>& preds, const llvm::Value* from, const llvm::Value* value) const {
         for (const VREdge* predEdge : preds) {
-            const LoadsMap& predLoads = predEdge->source->loads;
             const RelationsGraph& predGraph = predEdge->source->relations;
-            if (! predGraph.isEqual(from, predLoads.getPtrByVal(value)))
+            if (! predGraph.isLoad(from, value))
                 // DANGER does it suffice that from equals to value's ptr (before instruction on edge)?
                 return false;
         }
@@ -245,27 +247,28 @@ class GraphAnalyzer {
     }
 
     bool mergeLoads(VRLocation* location) {
-        LoadsMap newLoads;
+        RelationsGraph newGraph = location->relations;
 
         const std::vector<VREdge*>& preds = location->predecessors;
-        const auto& valuesMap = preds[0]->source->loads.getAllLoads();
+        const auto& loadBucketPairs = preds[0]->source->relations.getAllLoads();
 
-        for (const auto& fromValues : valuesMap) {
-            for (const llvm::Value* value : fromValues.second) {
-                if (loadsInAll(location->predecessors, fromValues.first, value))
-                    newLoads.setLoad(value, fromValues.first);
+        for (const auto& fromsValues : loadBucketPairs) {
+            for (const llvm::Value* from : fromsValues.first) {
+                for (const llvm::Value* val : fromsValues.second) {
+                    if (loadsInAll(location->predecessors, from, val))
+                        newGraph.setLoad(val, from);
+                }
             }
         }
 
-        return andSwapIfChanged(location->loads, newLoads); 
+        return andSwapIfChanged(location->relations, newGraph);
     }
 
-    template <typename T>
-    bool andSwapIfChanged(T& oldThing, T& newThing) {
-        if (oldThing == newThing)
+    bool andSwapIfChanged(RelationsGraph& oldGraph, RelationsGraph& newGraph) {
+        if (oldGraph == newGraph)
             return false;
             
-        swap(oldThing, newThing);
+        swap(oldGraph, newGraph);
         return true;
     }
 
