@@ -29,7 +29,7 @@ bool contains(const std::set<Val>& set, const Val& val) {
 }
 
 template <typename T>
-typename std::set<std::unique_ptr<T>>::iterator findPtr(std::set<std::unique_ptr<T>>& haystack,
+typename std::set<std::unique_ptr<T>>::iterator findPtr(const std::set<std::unique_ptr<T>>& haystack,
 														const T* const needle) {
 	auto it = haystack.begin();
 	
@@ -40,6 +40,13 @@ typename std::set<std::unique_ptr<T>>::iterator findPtr(std::set<std::unique_ptr
 	}
 
 	return it;
+}
+
+template <typename T>
+void eraseUniquePtr(std::set<std::unique_ptr<T>>& set, const T* const value) {
+	auto ite = findPtr(set, value);
+	assert (ite != set.end());
+	set.erase(ite);
 }
 
 template <typename T>
@@ -184,7 +191,7 @@ class RelationsGraph {
 		return contains(mapToBucket, lt) && contains(mapToBucket, rt);
 	}
 
-	std::vector<T> getEqual(EqualityBucket* valBucket) const {
+	std::vector<T> getEqual(const EqualityBucket* valBucket) const {
 		T val = getAny(valBucket);
 		return getEqual(val);
 	}
@@ -196,6 +203,13 @@ class RelationsGraph {
 			if (pair.second == bucket) return pair.first;
 		}
 		assert(0 && "no value in passed bucket");
+	}
+
+	bool hasRelations(const EqualityBucket* bucket) const {
+		return getEqual(bucket).size() > 1
+				|| ! bucket->lesser.empty()
+				|| ! bucket->lesserEqual.empty()
+				|| ! bucket->parents.empty();
 	}
 	
 public:
@@ -365,11 +379,8 @@ public:
 			}
 
 			// remove right
-			auto ite = findPtr(buckets, oldBucketPtr);
-			assert (ite != buckets.end());
-			
 			oldBucketPtr->disconnectAll();
-			buckets.erase(ite);
+			eraseUniquePtr(buckets, oldBucketPtr);
 		}
 	}
 
@@ -447,24 +458,36 @@ public:
 	void unsetAllLoadsByPtr(T from) {
 		if (! inGraph(from)) return;
 		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
+		EqualityBucket* valBucketPtr = findByKey(loads, fromBucketPtr);
+
 		loads.erase(fromBucketPtr);
+
+		if (! hasRelations(valBucketPtr)) {
+			T val = getAny(valBucketPtr);
+			mapToBucket.erase(val);
+			eraseUniquePtr(buckets, valBucketPtr);
+		}
+		if (! hasRelations(fromBucketPtr))
+			mapToBucket.erase(from);
+			eraseUniquePtr(buckets, fromBucketPtr);
 	}
 
 	void unsetAllLoads() {
         loads.clear();
+		
+		for (auto it = buckets.begin(); it != buckets.end(); ) {
+			if (! hasRelations(it->get())) {
+				T val = getAny(it->get());
+				mapToBucket.erase(val);
+				it = buckets.erase(it);
+			} else ++it;
+		}
     }
 
 	void unsetRelations(T val) {
 		EqualityBucket* valBucketPtr = mapToBucket.at(val);
-		
-		bool onlyReference = true;
-		for (auto& pair : mapToBucket) {
-			if (pair.first != val && pair.second == valBucketPtr) {
-				onlyReference = false;
-				break;
-			}
-		}
 
+		bool onlyReference = getEqual(valBucketPtr).size() == 1;
 		if (! onlyReference) {
 			// val moves to its own equality bucket
 			mapToBucket.erase(val);
@@ -636,12 +659,12 @@ public:
 		for (auto ptr : bucket->lesserEqual)
 			printInterleaved(stream, getEqual(ptr), " <= ", values);
 
-		EqualityBucket* foundKey = findByValue(loads, bucket);
+		//EqualityBucket* foundKey = findByValue(loads, bucket);
 		//if (foundKey)
 		//	printInterleaved(stream, values, " = LOAD ", getEqual(foundKey));
 
 		EqualityBucket* foundValue = findByKey(loads, bucket);
-		if (foundValue && !foundKey)
+		if (foundValue)
 			printInterleaved(stream, getEqual(foundValue), " = LOAD ", values);
 
 		if (bucket->lesser.empty() // values just equal and nothing else
