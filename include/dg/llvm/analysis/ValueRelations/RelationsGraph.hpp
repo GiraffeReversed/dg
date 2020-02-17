@@ -42,7 +42,6 @@ typename std::set<std::unique_ptr<T>>::iterator findPtr(std::set<std::unique_ptr
 	return it;
 }
 
-
 template <typename T>
 void substitueInSet(const std::map<T, T>& mapping, std::set<T>& set) {
 	std::set<T> newSet;
@@ -51,6 +50,21 @@ void substitueInSet(const std::map<T, T>& mapping, std::set<T>& set) {
 		newSet.insert(mapping.at(element));
 	}
 	set.swap(newSet);
+}
+
+template <typename T>
+T findByKey(std::map<T, T>& map, T key) {
+	auto found = map.find(key);
+	if (found == map.end()) return nullptr;
+	return found->second;
+}
+
+template <typename T>
+T findByValue(std::map<T, T>& map, T value) {
+	for (auto& pair : map) {
+		if (pair.second == value) return pair.first;
+	}
+	return nullptr;
 }
 
 } // namespace
@@ -119,7 +133,6 @@ class EqualityBucket {
 		return { std::stack<Frame>(), false };
 	}
 
-
 	void merge(const EqualityBucket& other) {
 		// set_union does't work in place
 		lesserEqual.insert(other.lesserEqual.begin(), other.lesserEqual.end());
@@ -172,16 +185,29 @@ class RelationsGraph {
     std::set<std::unique_ptr<EqualityBucket>> buckets;
 	std::map<T, EqualityBucket*> mapToBucket;
 
+	// map of pairs (a, b) such that {any of b} = load {any of a}
+	std::map<EqualityBucket*, EqualityBucket*> loads;
+
+	bool inGraph(T val) const {
+		return contains(mapToBucket, val);
+	}
+
 	bool areInGraph(T lt, T rt) const {
 		return contains(mapToBucket, lt) && contains(mapToBucket, rt);
 	}
 
 	std::vector<T> getEqual(EqualityBucket* valBucket) const {
-		for (const std::pair<T, EqualityBucket*>& valueToBucket : mapToBucket) {
-			if (valBucket == valueToBucket.second)
-				return getEqual(valueToBucket.first);
+		T val = getAny(valBucket);
+		return getEqual(val);
+	}
+
+	T getAny(const EqualityBucket* bucket) const {
+		assert(bucket);
+
+		for (auto& pair : mapToBucket) {
+			if (pair.second == bucket) return pair.first;
 		}
-		assert(0);
+		assert(0 && "no value in passed bucket");
 	}
 	
 public:
@@ -210,6 +236,9 @@ public:
 		// set map to use new copies
 		for (auto& pair : other.mapToBucket)
 			mapToBucket.emplace(pair.first, oldToNewPtr.at(pair.second));
+
+		for (auto& pair : other.loads)
+			loads.emplace(oldToNewPtr.at(pair.first), oldToNewPtr.at(pair.second));
 		
 	}
 
@@ -218,6 +247,7 @@ public:
 
 		swap(first.buckets, second.buckets);
 		swap(first.mapToBucket, second.mapToBucket);
+		swap(first.loads, second.loads);
 	}
 
 	RelationsGraph& operator=(RelationsGraph other) {
@@ -247,7 +277,11 @@ public:
 					return false;
             }
         }
-		return true;
+
+		std::set<std::pair<std::vector<T>, std::vector<T>>> ltLoads = lt.getAllLoads();
+		std::set<std::pair<std::vector<T>, std::vector<T>>> rtLoads = rt.getAllLoads();
+
+		return ltLoads == rtLoads;
 	}
 
 	friend bool operator!=(const RelationsGraph& lt, const RelationsGraph& rt) {
@@ -262,6 +296,7 @@ public:
 		mapToBucket.emplace(val, newBucketPtr);
 	}
 
+	// DANGER setEqual invalidates all EqualityBucket*
 	void setEqual(T lt, T rt) {
 
 		// DANGER defined duplicitly (already in subtreeContains)
@@ -313,6 +348,16 @@ public:
 
 			// replace values' pointers to right with pointers to left
 			for (auto& pair : mapToBucket) {
+				if (pair.second == oldBucketPtr)
+					pair.second = newBucketPtr;
+			}
+
+			// replace load info to regard only remaining bucket
+			for (auto& pair : loads) {
+				if (pair.first == oldBucketPtr) {
+					loads.erase(pair.first);
+					loads.emplace(newBucketPtr, pair.second);
+				}
 				if (pair.second == oldBucketPtr)
 					pair.second = newBucketPtr;
 			}
@@ -379,6 +424,40 @@ public:
 		ltBucketPtr->parents.insert(rtBucketPtr);
 	}
 
+	void setLoad(T val, T from) {
+
+		add(val);
+		add(from);
+
+		EqualityBucket* valBucketPtr = mapToBucket.at(val);
+		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
+
+		EqualityBucket* valEqualBucketPtr = findByKey(loads, fromBucketPtr);
+		EqualityBucket* fromEqualBucketPtr = findByValue(loads, valBucketPtr);
+
+		if (! fromEqualBucketPtr && ! valEqualBucketPtr) {
+			loads.emplace(fromBucketPtr, valBucketPtr);
+			return;
+		}
+
+		// setEqual invalidates all EqualityBucket* (might have been deleted)
+		if (valEqualBucketPtr) {
+			setEqual(val, getAny(valEqualBucketPtr));
+			fromEqualBucketPtr = findByValue(loads, mapToBucket.at(val));
+		}
+		if (fromEqualBucketPtr) setEqual(from, getAny(fromEqualBucketPtr));
+	}
+
+	void unsetAllLoadsByPtr(T from) {
+		if (! inGraph(from)) return;
+		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
+		loads.erase(fromBucketPtr);
+	}
+
+	void unsetAllLoads() {
+        loads.clear();
+    }
+
 	void unsetRelations(T val) {
 		EqualityBucket* valBucketPtr = mapToBucket.at(val);
 		
@@ -434,6 +513,18 @@ public:
 		return rtEqBucket->subtreeContains(mapToBucket.at(lt), false).second;
 	}
 
+	bool isLoad(T val, T from) const {
+		
+		if (! areInGraph(val, from))
+			return false;
+
+		EqualityBucket* valBucketPtr = mapToBucket.at(val);
+		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
+
+		auto found = loads.find(fromBucketPtr);
+		return found != loads.end() && valBucketPtr == found->second;
+	}
+
 	std::vector<T> getEqual(T val) const {
 		std::vector<T> result;
 		if (mapToBucket.find(val) == mapToBucket.end()) {
@@ -462,6 +553,30 @@ public:
 		return result;
 	}
 
+	std::vector<T> getPtrsByVal(T val) {
+		if (! inGraph(val)) return std::vector<T>();
+		EqualityBucket* valBucketPtr = mapToBucket.at(val);
+
+		EqualityBucket* fromBucketPtr = findByValue(loads, valBucketPtr);
+		return fromBucketPtr ? getEqual(fromBucketPtr) : std::vector<T>();
+	}
+
+	std::vector<T> getValsByPtr(T from) {
+		if (! inGraph(from)) return std::vector<T>();
+		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
+
+		EqualityBucket* valBucketPtr = findByKey(loads, fromBucketPtr);
+		return valBucketPtr ? getEqual(valBucketPtr) : std::vector<T>();
+	}
+
+	std::set<std::pair<std::vector<T>, std::vector<T>>> getAllLoads() const {
+		std::set<std::pair<std::vector<T>, std::vector<T>>> result;
+		for (const auto& pair : loads) {
+			result.emplace(getEqual(pair.first), getEqual(pair.second));
+		}
+		return result;
+	}
+
 #ifndef NDEBUG
     void dump() const {
 		std::map<const EqualityBucket*, int> numbering;
@@ -478,6 +593,10 @@ public:
 
 		for (const auto& bucketPtr : buckets) {
 			bucketPtr->dump(numbering);
+		}
+
+		for (const auto& bucketPair : loads) {
+			std::cout << numbering[bucketPair.second] << " = load " << numbering[bucketPair.first] << std::endl;
 		}
     }
 #endif
