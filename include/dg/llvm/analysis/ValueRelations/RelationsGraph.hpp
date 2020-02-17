@@ -432,20 +432,17 @@ public:
 		EqualityBucket* valBucketPtr = mapToBucket.at(val);
 		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
 
+		// get set of values that load from equal pointers
 		EqualityBucket* valEqualBucketPtr = findByKey(loads, fromBucketPtr);
-		EqualityBucket* fromEqualBucketPtr = findByValue(loads, valBucketPtr);
 
-		if (! fromEqualBucketPtr && ! valEqualBucketPtr) {
-			loads.emplace(fromBucketPtr, valBucketPtr);
-			return;
-		}
-
-		// setEqual invalidates all EqualityBucket* (might have been deleted)
+		// if there is such a set, we just add val to it
 		if (valEqualBucketPtr) {
 			setEqual(val, getAny(valEqualBucketPtr));
-			fromEqualBucketPtr = findByValue(loads, mapToBucket.at(val));
+		} else {
+			loads.emplace(fromBucketPtr, valBucketPtr);
 		}
-		if (fromEqualBucketPtr) setEqual(from, getAny(fromEqualBucketPtr));
+		// TODO can there be a situation, in which the fact, that i can load
+		// same value from different pointer mean that the pointers are equal?
 	}
 
 	void unsetAllLoadsByPtr(T from) {
