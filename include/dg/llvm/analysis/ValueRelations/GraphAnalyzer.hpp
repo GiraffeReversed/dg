@@ -53,8 +53,8 @@ class GraphAnalyzer {
         
         if (op->isInstruction()) {
             const llvm::Instruction* inst = static_cast<VRInstruction *>(op)->getInstruction();
-            forgetInvalidated(source->relations, inst);
-            processInstruction(newGraph, inst);          
+            forgetInvalidated(newGraph, inst);
+            processInstruction(newGraph, inst);
         } else if (op->isAssume()) { 
             if (op->isAssumeBool())
                 processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op));
@@ -118,7 +118,65 @@ class GraphAnalyzer {
     }
 
     void loadGen(RelationsGraph& graph, const llvm::LoadInst* load) {
+        graph.setLoad(load, load->getPointerOperand()->stripPointerCasts());
+    }
 
+    void gepGen(RelationsGraph& graph, const llvm::GetElementPtrInst* gep) {
+        if (gep->hasAllZeroIndices())
+            graph.setEqual(gep, gep->getPointerOperand());
+        // TODO something more?
+        // indices method gives iterator over indices
+    }
+
+    void extGen(RelationsGraph& graph, const llvm::CastInst* ext) {
+        graph.setEqual(ext, ext->getOperand(0));
+    }
+
+    void addGen(RelationsGraph& graph, const llvm::BinaryOperator* add) {
+        auto c1 = llvm::dyn_cast<llvm::ConstantInt>(add->getOperand(0));
+        auto c2 = llvm::dyn_cast<llvm::ConstantInt>(add->getOperand(1));
+
+        if (c1 && c2) {
+            const llvm::APInt& sum = c1->getValue() + c2->getValue();
+            return graph.setEqual(add, llvm::ConstantInt::get(c1->getType(), sum));
+        }
+
+        if (! c1 && ! c2) {
+            // TODO if unsigned, result must be greater
+            // but DANGER not true if overflowed
+            return;
+        }
+
+        const llvm::Value* param = nullptr;
+        if (c2) { c1 = c2; param = add->getOperand(0); }
+        else param = add->getOperand(1);
+
+        assert(c1 && add && param);
+        // add = param + c1
+        if (c1->isZero()) return graph.setEqual(add, param);
+        
+        else if (c1->isNegative()) {
+            // c1 < 0  ==>  param + c1 < param
+            graph.setLesser(add, param);
+
+            // lesser < param  ==>  lesser <= param - 1
+            if (c1->isMinusOne()) {
+                std::vector<const llvm::Value*> sample = graph.getSampleLesser(param);
+                for (const llvm::Value* lesser : sample)
+                    graph.setLesserEqual(lesser, add);
+            }
+
+        } else {
+            // c1 > 0 => param < param + c1
+            graph.setLesser(param, add);
+
+            // param < greater => param + 1 <= greater
+            if (c1->isOne()) {
+                std::vector<const llvm::Value*> sample = graph.getSampleGreater(param);
+                for (const llvm::Value* greater : sample)
+                    graph.setLesserEqual(add, greater);
+            }
+        }
     }
 
     void processInstruction(RelationsGraph& graph, const llvm::Instruction* inst) {
@@ -128,13 +186,12 @@ class GraphAnalyzer {
             case llvm::Instruction::Load:
                 return loadGen(graph, llvm::dyn_cast<llvm::LoadInst>(inst));
             case llvm::Instruction::GetElementPtr:
-                //return gepGen(cast<GetElementPtrInst>(I), E, R, source);
-                break;
+                return gepGen(graph, llvm::cast<llvm::GetElementPtrInst>(inst));
             case llvm::Instruction::ZExt:
             case llvm::Instruction::SExt: // (S)ZExt should not change value
-                return graph.setEqual(inst, inst->getOperand(0));
+                return extGen(graph, llvm::dyn_cast<llvm::CastInst>(inst));
             case llvm::Instruction::Add:
-                //return plusGen(I, source->equalities, E, Rel);
+                return addGen(graph, llvm::dyn_cast<llvm::BinaryOperator>(inst));
             case llvm::Instruction::Sub:
                 //return minusGen(I, source->equalities, E, Rel);
             case llvm::Instruction::Mul:
