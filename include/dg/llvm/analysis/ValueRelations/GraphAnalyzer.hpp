@@ -198,6 +198,25 @@ class GraphAnalyzer {
         }
     }
 
+    void mulGen(RelationsGraph& graph, const llvm::BinaryOperator* mul) {
+        auto c1 = llvm::dyn_cast<llvm::ConstantInt>(mul->getOperand(0));
+        auto c2 = llvm::dyn_cast<llvm::ConstantInt>(mul->getOperand(1));
+        // TODO check wheter equal to constant
+
+        if (solvesSameType(graph, c1, c2, mul)) return;
+
+        const llvm::Value* param = nullptr;
+        if (c2) { c1 = c2; param = mul->getOperand(0); }
+        else param = mul->getOperand(1);
+
+        assert(c1 && mul && param);
+        // mul = param + c1
+        if (c1->isZero()) return graph.setEqual(mul, c1);
+        else if (c1->isOne()) return graph.setEqual(mul, param);
+
+        // TODO collect something here?
+    }
+
     bool solvesSameType(RelationsGraph& graph,
                         const llvm::ConstantInt* c1, const llvm::ConstantInt* c2,
                         const llvm::BinaryOperator* op) {
@@ -238,6 +257,11 @@ class GraphAnalyzer {
             else           graph.setLesserEqual(op, value);
     }
 
+    void castGen(RelationsGraph& graph, const llvm::CastInst* cast) {
+        if (cast->isLosslessCast() || cast->isNoopCast(module.getDataLayout()))
+            graph.setEqual(cast, cast->getOperand(0));
+    }
+
     void processInstruction(RelationsGraph& graph, const llvm::Instruction* inst) {
         switch(inst->getOpcode()) {
             case llvm::Instruction::Store:
@@ -254,14 +278,11 @@ class GraphAnalyzer {
             case llvm::Instruction::Sub:
                 return subGen(graph, llvm::dyn_cast<llvm::BinaryOperator>(inst));
             case llvm::Instruction::Mul:
-                //return mulGen(I, E, Rel);
+                return mulGen(graph, llvm::dyn_cast<llvm::BinaryOperator>(inst));
             default:
-                /*if (auto C = dyn_cast<CastInst>(I)) {
-                    if (C->isLosslessCast() || C->isNoopCast(_M->getDataLayout())) {
-                        return E.add(C, C->getOperand(0));
-                    }
-                }*/
-                return;
+                if (auto cast = llvm::dyn_cast<llvm::CastInst>(inst)) {
+                    return castGen(graph, cast);
+                }
         }
     }
 
