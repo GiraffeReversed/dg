@@ -17,8 +17,12 @@ inline std::string getValName(const llvm::Value *val) {
     ro << *val;
     ro.flush();
 
+    std::string result = ostr.str();
+    auto it = result.begin();
+    while (it != result.end() && *it == ' ') it = result.erase(it);
+
     // break the string if it is too long
-    return ostr.str();
+    return result;
 }
 
 } // namespace debug

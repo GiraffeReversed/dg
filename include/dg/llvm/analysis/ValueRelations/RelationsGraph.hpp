@@ -648,7 +648,7 @@ public:
 		std::string result;
 		int space_counter = 0;
 		for (char c : str) {
-			if (c != ' ' || ++space_counter <= 4) {
+			if (c != ' ' || ++space_counter <= 2) {
 				result += c;
 			} else break;
 		}
@@ -660,7 +660,7 @@ public:
 		for (auto val : vals) {
 			stream << strip(debug::getValName(val)) << "; ";
 		}
-		stream << " }";
+		stream << "}";
 	}
 
 	void printInterleaved(std::ostream& stream, const std::vector<T>& v1,
