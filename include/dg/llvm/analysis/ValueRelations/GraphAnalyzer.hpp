@@ -53,8 +53,10 @@ class GraphAnalyzer {
         
         if (op->isInstruction()) {
             const llvm::Instruction* inst = static_cast<VRInstruction *>(op)->getInstruction();
+    		std::cerr << debug::getValName(inst) << ":" << std::endl;
             forgetInvalidated(newGraph, inst);
             processInstruction(newGraph, inst);
+            newGraph.ddump();
         } else if (op->isAssume()) { 
             if (op->isAssumeBool())
                 processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op));
@@ -135,17 +137,9 @@ class GraphAnalyzer {
     void addGen(RelationsGraph& graph, const llvm::BinaryOperator* add) {
         auto c1 = llvm::dyn_cast<llvm::ConstantInt>(add->getOperand(0));
         auto c2 = llvm::dyn_cast<llvm::ConstantInt>(add->getOperand(1));
+        // TODO check wheter equal to constant
 
-        if (c1 && c2) {
-            const llvm::APInt& sum = c1->getValue() + c2->getValue();
-            return graph.setEqual(add, llvm::ConstantInt::get(c1->getType(), sum));
-        }
-
-        if (! c1 && ! c2) {
-            // TODO if unsigned, result must be greater
-            // but DANGER not true if overflowed
-            return;
-        }
+        if (solvesSameType(graph, c1, c2, add)) return;
 
         const llvm::Value* param = nullptr;
         if (c2) { c1 = c2; param = add->getOperand(0); }
@@ -159,24 +153,89 @@ class GraphAnalyzer {
             // c1 < 0  ==>  param + c1 < param
             graph.setLesser(add, param);
 
-            // lesser < param  ==>  lesser <= param - 1
-            if (c1->isMinusOne()) {
-                std::vector<const llvm::Value*> sample = graph.getSampleLesser(param);
-                for (const llvm::Value* lesser : sample)
-                    graph.setLesserEqual(lesser, add);
-            }
+            // lesser < param  ==>  lesser <= param + (-1)
+            if (c1->isMinusOne()) solvesDiffOne(graph, param, add, true);
 
         } else {
             // c1 > 0 => param < param + c1
             graph.setLesser(param, add);
 
             // param < greater => param + 1 <= greater
-            if (c1->isOne()) {
-                std::vector<const llvm::Value*> sample = graph.getSampleGreater(param);
-                for (const llvm::Value* greater : sample)
-                    graph.setLesserEqual(add, greater);
-            }
+            if (c1->isOne()) solvesDiffOne(graph, param, add, false);
         }
+    }
+
+    void subGen(RelationsGraph& graph, const llvm::BinaryOperator* sub) {
+        auto c1 = llvm::dyn_cast<llvm::ConstantInt>(sub->getOperand(0));
+        auto c2 = llvm::dyn_cast<llvm::ConstantInt>(sub->getOperand(1));
+        // TODO check wheter equal to constant
+
+        if (solvesSameType(graph, c1, c2, sub)) return;
+
+        if (c1) {
+            // TODO collect something here?
+            return;
+        }
+
+        const llvm::Value* param = sub->getOperand(0);
+        assert(c2 && sub && param);
+        // sub = param - c1
+        if (c2->isZero()) return graph.setEqual(sub, param);
+        
+        else if (c2->isNegative()) {
+            // c1 < 0  ==>  param < param - c1
+            graph.setLesser(param, sub);
+
+            // param < greater ==> param - (-1) <= greater
+            if (c2->isMinusOne()) solvesDiffOne(graph, param, sub, false);
+
+        } else {
+            // c1 > 0 => param - c1 < param
+            graph.setLesser(sub, param);
+
+            // lesser < param  ==>  lesser <= param - 1
+            if (c2->isOne()) solvesDiffOne(graph, param, sub, true);
+        }
+    }
+
+    bool solvesSameType(RelationsGraph& graph,
+                        const llvm::ConstantInt* c1, const llvm::ConstantInt* c2,
+                        const llvm::BinaryOperator* op) {
+        if (c1 && c2) {
+            llvm::APInt result;
+            
+            switch(op->getOpcode()) {
+                case llvm::Instruction::Add:
+                    result = c1->getValue() + c2->getValue(); break;
+                case llvm::Instruction::Sub:
+                    result = c1->getValue() - c2->getValue(); break;
+                case llvm::Instruction::Mul:
+                    result = c1->getValue() * c2->getValue(); break;
+                default:
+                    assert(0 && "solvesSameType: shouldn't handle any other operation");
+            }
+            graph.setEqual(op, llvm::ConstantInt::get(c1->getType(), result));
+            return true;
+        }
+
+        if (! c1 && ! c2) {
+            // TODO collect something here?
+            return true;
+        }
+        return false;
+    }
+
+    void solvesDiffOne(RelationsGraph& graph,
+                       const llvm::Value* param,
+                       const llvm::BinaryOperator* op,
+                       bool getLesser) {
+
+        std::vector<const llvm::Value*> sample = getLesser ?
+                    graph.getSampleLesser(param) : graph.getSampleGreater(param);
+
+        for (const llvm::Value* value : sample)
+            if (getLesser) graph.setLesserEqual(value, op);
+            else           graph.setLesserEqual(op, value);
     }
 
     void processInstruction(RelationsGraph& graph, const llvm::Instruction* inst) {
@@ -193,7 +252,7 @@ class GraphAnalyzer {
             case llvm::Instruction::Add:
                 return addGen(graph, llvm::dyn_cast<llvm::BinaryOperator>(inst));
             case llvm::Instruction::Sub:
-                //return minusGen(I, source->equalities, E, Rel);
+                return subGen(graph, llvm::dyn_cast<llvm::BinaryOperator>(inst));
             case llvm::Instruction::Mul:
                 //return mulGen(I, E, Rel);
             default:
