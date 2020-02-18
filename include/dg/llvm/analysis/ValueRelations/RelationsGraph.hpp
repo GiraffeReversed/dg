@@ -172,6 +172,25 @@ class EqualityBucket {
 		substitueInSet<EqualityBucket*>(oldToNewPtr, lesser);
 		substitueInSet<EqualityBucket*>(oldToNewPtr, parents);
 	}
+
+	void searchForGreater(std::vector<EqualityBucket*>& acc) {
+		for (EqualityBucket* parentPtr : parents) {
+			if (contains(parentPtr->lesser, this))
+				acc.push_back(parentPtr);
+
+			if (contains(parentPtr->lesserEqual, this)) {
+				parentPtr->searchForGreater(acc);
+			}
+		}
+	}
+
+	void searchForLesser(std::vector<EqualityBucket*>& acc) {
+		for (EqualityBucket* lesserPtr : lesser)
+			acc.push_back(lesserPtr);
+
+		for (EqualityBucket* lesserEqualPtr : lesserEqual)
+			lesserEqualPtr->searchForLesser(acc);
+	}
 };
 
 template <typename T>
@@ -562,6 +581,34 @@ public:
 			}
 		}
 		
+		return result;
+	}
+
+	std::vector<T> getSampleLesser(T val) const {
+		if (! inGraph(val)) return {};
+		EqualityBucket* bucketPtr = mapToBucket.at(val);
+
+		std::vector<EqualityBucket*> acc;
+		bucketPtr->searchForLesser(acc);
+
+		std::vector<T> result;
+		for (EqualityBucket* bucketPtr : acc) {
+			result.push_back(getAny(bucketPtr));
+		}
+		return result;
+	}
+
+	std::vector<T> getSampleGreater(T val) const {
+		if (! inGraph(val)) return {};
+		EqualityBucket* bucketPtr = mapToBucket.at(val);
+
+		std::vector<EqualityBucket*> acc;
+		bucketPtr->searchForGreater(acc);
+
+		std::vector<T> result;
+		for (EqualityBucket* bucketPtr : acc) {
+			result.push_back(getAny(bucketPtr));
+		}
 		return result;
 	}
 
