@@ -137,6 +137,22 @@ struct VRLocation  {
         successors.emplace_back(std::move(edge));
     }
 
+    std::vector<VRLocation*> getPredLocations() {
+        std::vector<VRLocation*> result;
+        for (VREdge * edge : predecessors) {
+            result.push_back(edge->source);
+        }
+        return result;
+    }
+
+    std::vector<VRLocation*> getSuccLocations() {
+        std::vector<VRLocation*> result;
+        for (auto& edge : successors) {
+            result.push_back(edge->target);
+        }
+        return result;
+    }
+
 #ifndef NDEBUG
     void dump() const {
         std::cout << id << std::endl;
