@@ -349,6 +349,14 @@ class GraphAnalyzer {
 
     bool mergeRelations(VRLocation* location) {
         return mergeRelations(location->getPredLocations(), location);
+        // TODO to keep more relations we could use placeholder buckets
+        // when we know, what we load load from some address
+        // and on each incoming edge we can determine some relation
+        // we can say, that the address loads placeholder bucket (bucket, which is empty)
+        // and that this bucket is in given relation
+        // when we later perform load from that address
+        // we will directly infer the relation
+        // I can use it in the basic_loop exmaple
     }
 
     bool mergeRelations(const std::vector<VRLocation*>& preds, VRLocation* location) {
