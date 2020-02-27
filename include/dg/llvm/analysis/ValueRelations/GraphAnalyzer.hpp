@@ -284,7 +284,7 @@ class GraphAnalyzer {
                     return castGen(graph, cast);
                 }
         }
-    }
+    } 
 
     void processAssumeBool(RelationsGraph& newGraph, VRAssumeBool* assume) const {
         const llvm::ICmpInst* icmp = llvm::dyn_cast<llvm::ICmpInst>(assume->getValue());
@@ -334,28 +334,33 @@ class GraphAnalyzer {
         newGraph.setEqual(val1, val2);
     }
 
-    bool relatesInAll(const std::vector<VREdge*>& preds,
+    bool relatesInAll(const std::vector<VRLocation*>& locations,
                       const llvm::Value* fst,
                       const llvm::Value* snd,
                       bool (RelationsGraph::*relates)(const llvm::Value*, const llvm::Value*) const) const {
                       // which is function pointer to isEqual, isLesser, or isLesserEqual
 
-        for (const VREdge* predEdge : preds) {
-            const RelationsGraph& predGraph = predEdge->source->relations;
-            if (! (predGraph.*relates)(fst, snd))
+        for (const VRLocation* vrloc : locations) {
+            if (! (vrloc->relations.*relates)(fst, snd))
                 return false;
         }
         return true;
     }
 
     bool mergeRelations(VRLocation* location) {
-        RelationsGraph newGraph;
+        return mergeRelations(location->getPredLocations(), location);
+    }
 
-        const std::vector<VREdge*>& preds = location->predecessors;
-        std::vector<const llvm::Value*> values = preds[0]->source->relations.getAllValues();
+    bool mergeRelations(const std::vector<VRLocation*>& preds, VRLocation* location) {
+        if (preds.empty()) return false;
+
+        RelationsGraph newGraph = location->relations;
+        RelationsGraph& oldGraph = preds[0]->relations;
+        std::vector<const llvm::Value*> values = oldGraph.getAllValues();
 
         for (const llvm::Value* fst : values) {
             for (const llvm::Value* snd : values) {
+                if (fst == snd) continue;
 
                 if (relatesInAll(preds, fst, snd, &RelationsGraph::isEqual))
                     newGraph.setEqual(fst, snd);
@@ -373,10 +378,9 @@ class GraphAnalyzer {
         return andSwapIfChanged(location->relations, newGraph);
     }
 
-    bool loadsInAll(const std::vector<VREdge*>& preds, const llvm::Value* from, const llvm::Value* value) const {
-        for (const VREdge* predEdge : preds) {
-            const RelationsGraph& predGraph = predEdge->source->relations;
-            if (! predGraph.isLoad(from, value))
+    bool loadsInAll(const std::vector<VRLocation*>& locations, const llvm::Value* from, const llvm::Value* value) const {
+        for (const VRLocation* vrloc : locations) {
+            if (! vrloc->relations.isLoad(from, value))
                 // DANGER does it suffice that from equals to value's ptr (before instruction on edge)?
                 return false;
         }
@@ -384,15 +388,19 @@ class GraphAnalyzer {
     }
 
     bool mergeLoads(VRLocation* location) {
-        RelationsGraph newGraph = location->relations;
+        return mergeLoads(location->getPredLocations(), location);
+    }
 
-        const std::vector<VREdge*>& preds = location->predecessors;
-        const auto& loadBucketPairs = preds[0]->source->relations.getAllLoads();
+    bool mergeLoads(const std::vector<VRLocation*>& preds, VRLocation* location) {
+        if (preds.empty()) return false;
+
+        RelationsGraph newGraph = location->relations;
+        const auto& loadBucketPairs = preds[0]->relations.getAllLoads();
 
         for (const auto& fromsValues : loadBucketPairs) {
             for (const llvm::Value* from : fromsValues.first) {
                 for (const llvm::Value* val : fromsValues.second) {
-                    if (loadsInAll(location->predecessors, from, val))
+                    if (loadsInAll(preds, from, val))
                         newGraph.setLoad(val, from);
                 }
             }
@@ -409,6 +417,66 @@ class GraphAnalyzer {
         return true;
     }
 
+    bool passCallSiteRelations() {
+        bool changed = false;
+
+        for (const llvm::Function& function : module) {
+            if (function.isDeclaration())
+                continue;
+            
+            VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
+            assert(vrblockOfEntry);
+
+            // for each location, where the function is called
+            std::vector<VRLocation*> callLocs;
+            for (const llvm::Value* user : function.users()) {
+                const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
+                if (! call) continue;
+
+                VRLocation* vrlocOfCall = locationMapping.at(call);
+                assert(vrlocOfCall);
+                callLocs.push_back(vrlocOfCall);
+
+                RelationsGraph newGraph = vrblockOfEntry->first()->relations;
+
+                unsigned argCount = 0;
+                for (const llvm::Argument& receivedArg : function.args()) {
+                    if (argCount > call->getNumArgOperands()) break;
+                    const llvm::Value* sentArg = call->getArgOperand(argCount);
+
+                    newGraph.setEqual(sentArg, &receivedArg);
+                    // DANGER, if function is called multiple times, all it's parameters are set equal
+                    ++argCount;
+                }
+                changed |= andSwapIfChanged(vrblockOfEntry->first()->relations, newGraph);
+            }
+            changed |= mergeRelations(callLocs, vrblockOfEntry->first());
+            changed |= mergeLoads(callLocs, vrblockOfEntry->first());
+        }
+        return changed;
+    }
+
+    bool analysisPass() {
+        bool changed = false; // TODO do this proper (stop if not changed)
+        changed |= passCallSiteRelations();
+
+        for (auto& pair : blockMapping) {
+            auto& vrblockPtr = pair.second;
+
+            for (auto& locationPtr : vrblockPtr->locations) {
+                if (locationPtr->predecessors.size() > 1) {
+                    changed |= mergeRelations(locationPtr.get());
+                    changed |= mergeLoads(locationPtr.get());
+                } else if (locationPtr->predecessors.size() == 1) {
+                    VREdge* edge = locationPtr->predecessors[0];
+                    changed |= processOperation(edge->source, edge->target, edge->op.get());
+                } // else no predecessors => nothing to be passed
+            }
+
+        }
+        return changed;
+    }
+
 public:
     GraphAnalyzer(const llvm::Module& m,
                   std::map<const llvm::Instruction *, VRLocation *>& locs,
@@ -416,19 +484,15 @@ public:
                   : module(m), locationMapping(locs), blockMapping(blcs) {}
 
     void analyze() {
-        for (auto& pair : blockMapping) {
-            auto& vrblockPtr = pair.second;
+        unsigned maxPass = 2;
 
-            for (auto& locationPtr : vrblockPtr->locations) {
-                if (locationPtr->predecessors.size() > 1) {
-                    mergeRelations(locationPtr.get());
-                    mergeLoads(locationPtr.get());
-                } else if (locationPtr->predecessors.size() == 1) {
-                    VREdge* edge = locationPtr->predecessors[0];
-                    processOperation(edge->source, edge->target, edge->op.get());
-                } // else no predecessors => nothing to be passed
-            }
-
+        bool changed = true;
+        unsigned passNum = 0;
+        while (changed && ++passNum <= maxPass) {
+            std::cerr << "========================================================" << std::endl;
+            std::cerr << "                     PASS NUMBER " << passNum << std::endl;
+            std::cerr << "========================================================" << std::endl;
+            changed = analysisPass();
         }
     }
 };
