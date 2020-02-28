@@ -45,6 +45,8 @@ class GraphAnalyzer {
     const std::map<const llvm::Instruction *, VRLocation *>& locationMapping;
     const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping;
 
+    std::set<const llvm::Value*> fixedMemory;
+
     bool processOperation(VRLocation* source, VRLocation* target, VROp* op) {
         if (! target) return false;
         assert(source && target && op);
@@ -88,7 +90,8 @@ class GraphAnalyzer {
             return;
         }
 
-        graph.unsetAllLoadsByPtr(memoryPtr);
+        graph.unsetAllLoadsByPtr(memoryPtr); // unset underlying memory
+        graph.unsetAllLoadsByPtr(inst); // unset pointer itself
 
         // unset all loads whose origin is unknown
         //   (since they may be aliases of written location)
@@ -414,6 +417,19 @@ class GraphAnalyzer {
             }
         }
 
+        for (const VRLocation* pred : preds) {
+            for (const auto& fromsValues : pred->relations.getAllLoads()) {
+                for (const llvm::Value* from : fromsValues.first) {
+                    if (fixedMemory.find(from) != fixedMemory.end()) {
+                        for (const auto& val : fromsValues.second) {
+                            newGraph.setLoad(val, from);
+                            // DANGER DIFF doesn't check whether value (not from) changes
+                        }
+                    }
+                }
+            }
+        }
+
         return andSwapIfChanged(location->relations, newGraph);
     }
 
@@ -465,7 +481,7 @@ class GraphAnalyzer {
     }
 
     bool analysisPass() {
-        bool changed = false; // TODO do this proper (stop if not changed)
+        bool changed = false;
         changed |= passCallSiteRelations();
 
         for (auto& pair : blockMapping) {
@@ -473,8 +489,8 @@ class GraphAnalyzer {
 
             for (auto& locationPtr : vrblockPtr->locations) {
                 if (locationPtr->predecessors.size() > 1) {
-                    changed |= mergeRelations(locationPtr.get());
-                    changed |= mergeLoads(locationPtr.get());
+                    changed = mergeRelations(locationPtr.get())
+                            | mergeLoads(locationPtr.get());
                 } else if (locationPtr->predecessors.size() == 1) {
                     VREdge* edge = locationPtr->predecessors[0];
                     changed |= processOperation(edge->source, edge->target, edge->op.get());
@@ -485,20 +501,77 @@ class GraphAnalyzer {
         return changed;
     }
 
+    void initializeFixedMemory() {
+        for (const auto& function : module) {
+            for (const auto& block : function) {
+                for (const auto& inst : block) {
+
+                    if (auto alloca = llvm::dyn_cast<llvm::AllocaInst>(&inst)) {
+                        bool temp = false;
+                        if (! mayHaveAlias(alloca) && writtenMaxOnce(alloca, temp))
+                            fixedMemory.insert(alloca);
+                    }
+                }
+            }
+        }
+    }
+
+    bool mayHaveAlias(const llvm::User* val) const {
+        // if value is not pointer, we don't care whether there can be other name for same value
+        if (! val->getType()->isPointerTy()) return false;
+
+        for (const llvm::User* user : val->users()) {
+
+            // if value is stored, it can be accessed
+            if (llvm::isa<llvm::StoreInst>(user)) {
+                if (user->getOperand(0) == val) return true;
+
+            } else if (llvm::isa<llvm::CastInst>(user)) {
+                if (mayHaveAlias(user)) return true;
+
+            } else if (auto inst = llvm::dyn_cast<llvm::Instruction>(user)) {
+                if (inst->mayWriteToMemory()) return true;
+            }
+            // DIFF doesn't check debug information and some intrinsic instructions
+        }
+        return false;
+    }
+
+    bool writtenMaxOnce(const llvm::User* val, bool& writtenAlready) const {
+        for (const llvm::User* user : val->users()) {
+
+            if (llvm::isa<llvm::StoreInst>(user)) {
+                if (user->getOperand(1)->stripPointerCasts() == val) {
+                    if (writtenAlready) return false;
+                    writtenAlready = true;
+                }
+            } else if (llvm::isa<llvm::CastInst>(user)) {
+                if (! writtenMaxOnce(user, writtenAlready)) return false;
+
+            } else if (auto inst = llvm::dyn_cast<llvm::Instruction>(user)) {
+                if (inst->mayWriteToMemory()) return false;
+            }
+        }
+        return true;
+    }
+
+
+
 public:
     GraphAnalyzer(const llvm::Module& m,
                   std::map<const llvm::Instruction *, VRLocation *>& locs,
                   std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs)
-                  : module(m), locationMapping(locs), blockMapping(blcs) {}
+                  : module(m), locationMapping(locs), blockMapping(blcs) {
+        initializeFixedMemory();
+    }
 
-    void analyze() {
-        unsigned maxPass = 2;
+    void analyze(unsigned maxPass) {
 
         bool changed = true;
         unsigned passNum = 0;
         while (changed && ++passNum <= maxPass) {
             std::cerr << "========================================================" << std::endl;
-            std::cerr << "                     PASS NUMBER " << passNum << std::endl;
+            std::cerr << "                     PASS NUMBER " << passNum             << std::endl;
             std::cerr << "========================================================" << std::endl;
             changed = analysisPass();
         }
