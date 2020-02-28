@@ -137,6 +137,18 @@ struct VRLocation  {
         successors.emplace_back(std::move(edge));
     }
 
+    std::vector<VREdge *> getPredecessors() {
+        return predecessors;
+    }
+
+    std::vector<VREdge *> getSuccessors() {
+        std::vector<VREdge*> result;
+        for (auto& succ : successors) {
+            result.push_back(succ.get());
+        }
+        return result;
+    }
+
     std::vector<VRLocation*> getPredLocations() {
         std::vector<VRLocation*> result;
         for (VREdge * edge : predecessors) {
