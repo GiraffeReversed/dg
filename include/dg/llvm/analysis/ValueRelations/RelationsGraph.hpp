@@ -142,11 +142,22 @@ class EqualityBucket {
 		return { std::stack<Frame>(), false };
 	}
 
-	void merge(const EqualityBucket& other) {
+	void merge(EqualityBucket& other) { // TODO other should be const
 		// set_union does't work in place
 		lesserEqual.insert(other.lesserEqual.begin(), other.lesserEqual.end());
+		for (EqualityBucket* bucketPtr : other.lesserEqual)
+			bucketPtr->parents.insert(this);
+
 		lesser.insert(other.lesser.begin(), other.lesser.end());
+		for (EqualityBucket* bucketPtr : other.lesser)
+			bucketPtr->parents.insert(this);
+
 		parents.insert(other.parents.begin(), other.parents.end());
+		for (EqualityBucket* parent : other.parents) {
+			if (contains(parent->lesserEqual, &other)) parent->lesserEqual.insert(this);
+			else if (contains(parent->lesser,      &other)) parent->lesser.insert(this);
+			else assert(0); // was a parent so it must have been lesser or lesserEqual
+		}
 	}
 
 	void disconnectAll() {
@@ -376,31 +387,23 @@ public:
 			}
 
 			// replace load info to regard only remaining bucket
-			for (auto& pair : loads) {
-				if (pair.first == oldBucketPtr) {
-					loads.erase(pair.first);
-					loads.emplace(newBucketPtr, pair.second);
+			for (auto pairIt = loads.begin(); pairIt != loads.end(); ++pairIt) {
+				if (pairIt->first == oldBucketPtr) {
+					pairIt = loads.erase(pairIt);
+					loads.emplace(newBucketPtr, pairIt->second);
 				}
-				if (pair.second == oldBucketPtr)
-					pair.second = newBucketPtr;
+
+				if (pairIt->second == oldBucketPtr)
+					pairIt->second = newBucketPtr;
 			}
 
 			// make successors and parents of right belong to left too
 			newBucketPtr->merge(*oldBucketPtr);
 
-			for (EqualityBucket* parent : oldBucketPtr->parents) {
-				if (contains(parent->lesser, oldBucketPtr)) {
-					parent->lesser.erase(oldBucketPtr);
-					parent->lesser.insert(newBucketPtr);
-				} else if (contains(parent->lesserEqual, oldBucketPtr)) {
-					parent->lesserEqual.erase(oldBucketPtr);
-					parent->lesserEqual.insert(newBucketPtr);
-				} else assert(0); // was parent so it must have had been lesser or lesserEqual
-				newBucketPtr->parents.insert(parent);
-			}
+			// make successors and parents of right forget it
+			oldBucketPtr->disconnectAll();
 
 			// remove right
-			oldBucketPtr->disconnectAll();
 			eraseUniquePtr(buckets, oldBucketPtr);
 		}
 	}
