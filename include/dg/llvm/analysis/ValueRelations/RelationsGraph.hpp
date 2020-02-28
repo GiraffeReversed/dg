@@ -211,6 +211,8 @@ class RelationsGraph {
 	}
 
 	std::vector<T> getEqual(const EqualityBucket* valBucket) const {
+		assert(valBucket);
+
 		T val = getAny(valBucket);
 		return getEqual(val);
 	}
@@ -476,8 +478,10 @@ public:
 
 	void unsetAllLoadsByPtr(T from) {
 		if (! inGraph(from)) return;
+
 		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
 		EqualityBucket* valBucketPtr = findByKey(loads, fromBucketPtr);
+		if (! valBucketPtr) return; // from doesn't load anything
 
 		loads.erase(fromBucketPtr);
 
