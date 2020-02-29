@@ -58,7 +58,6 @@ class GraphAnalyzer {
     		std::cerr << debug::getValName(inst) << ":" << std::endl;
             forgetInvalidated(newGraph, inst);
             processInstruction(newGraph, inst);
-            newGraph.ddump();
         } else if (op->isAssume()) { 
             if (op->isAssumeBool())
                 processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op));
@@ -119,11 +118,11 @@ class GraphAnalyzer {
     }
 
     void storeGen(RelationsGraph& graph, const llvm::StoreInst* store) {
-        graph.setLoad(store->getValueOperand(), store->getPointerOperand()->stripPointerCasts());
+        graph.setLoad(store->getPointerOperand()->stripPointerCasts(), store->getValueOperand());
     }
 
     void loadGen(RelationsGraph& graph, const llvm::LoadInst* load) {
-        graph.setLoad(load, load->getPointerOperand()->stripPointerCasts());
+        graph.setLoad(load->getPointerOperand()->stripPointerCasts(), load);
     }
 
     void gepGen(RelationsGraph& graph, const llvm::GetElementPtrInst* gep) {
@@ -412,7 +411,7 @@ class GraphAnalyzer {
             for (const llvm::Value* from : fromsValues.first) {
                 for (const llvm::Value* val : fromsValues.second) {
                     if (loadsInAll(preds, from, val))
-                        newGraph.setLoad(val, from);
+                        newGraph.setLoad(from, val);
                 }
             }
         }
@@ -422,7 +421,7 @@ class GraphAnalyzer {
                 for (const llvm::Value* from : fromsValues.first) {
                     if (fixedMemory.find(from) != fixedMemory.end()) {
                         for (const auto& val : fromsValues.second) {
-                            newGraph.setLoad(val, from);
+                            newGraph.setLoad(from, val);
                             // DANGER DIFF doesn't check whether value (not from) changes
                         }
                     }
@@ -495,6 +494,7 @@ class GraphAnalyzer {
                     VREdge* edge = locationPtr->predecessors[0];
                     changed |= processOperation(edge->source, edge->target, edge->op.get());
                 } // else no predecessors => nothing to be passed
+                locationPtr->relations.ddump();
             }
 
         }
