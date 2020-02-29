@@ -389,8 +389,8 @@ public:
 			// replace load info to regard only remaining bucket
 			for (auto pairIt = loads.begin(); pairIt != loads.end(); ++pairIt) {
 				if (pairIt->first == oldBucketPtr) {
-					pairIt = loads.erase(pairIt);
 					loads.emplace(newBucketPtr, pairIt->second);
+					pairIt = loads.erase(pairIt);
 				}
 
 				if (pairIt->second == oldBucketPtr)
@@ -458,7 +458,7 @@ public:
 		ltBucketPtr->parents.insert(rtBucketPtr);
 	}
 
-	void setLoad(T val, T from) {
+	void setLoad(T from, T val) {
 
 		add(val);
 		add(from);
@@ -558,7 +558,7 @@ public:
 		return rtEqBucket->subtreeContains(mapToBucket.at(lt), false).second;
 	}
 
-	bool isLoad(T val, T from) const {
+	bool isLoad(T from, T val) const {
 		
 		if (! areInGraph(val, from))
 			return false;
