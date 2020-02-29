@@ -117,6 +117,8 @@ struct VREdge {
 
     std::unique_ptr<VROp> op;
 
+    bool loopsBack = false;
+
     VREdge(VRLocation *s, VRLocation *t, std::unique_ptr<VROp>&& op)
     : source(s), target(t), op(std::move(op)) {}
 };

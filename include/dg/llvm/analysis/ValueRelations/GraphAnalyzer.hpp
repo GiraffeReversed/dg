@@ -23,6 +23,8 @@
 #pragma GCC diagnostic pop
 #endif
 
+#include <algorithm>
+
 #include "GraphElements.hpp"
 #include "RelationsGraph.hpp"
 
@@ -72,7 +74,7 @@ class GraphAnalyzer {
         if (! inst->mayWriteToMemory() && ! inst->mayHaveSideEffects()) return;
         // DIFF does not ignore some intrinsic insts
 
-        if (! llvm::isa<llvm::StoreInst>(inst)) {
+        if (! llvm::isa<llvm::StoreInst>(inst)) { // most probably CallInst
             // unable to presume anything about such instruction
             graph.unsetAllLoads();
             return;
@@ -85,7 +87,16 @@ class GraphAnalyzer {
 
         if (! eqivToAlloca(graph.getEqual(memoryPtr))) {
             // we can't tell, where the instruction writes to
-            graph.unsetAllLoads();
+            // except that it can't be memory, that surely has no alias
+
+            for (const auto& fromsValues : graph.getAllLoads()) {
+                for (const llvm::Value* from : fromsValues.first) {
+                    if (mayHaveAlias(llvm::cast<llvm::User>(from))) {
+                        graph.unsetAllLoadsByPtr(from);
+                        break;
+                    } // else we may remember this load
+                }
+            }
             return;
         }
 
@@ -529,6 +540,17 @@ class GraphAnalyzer {
             } else if (llvm::isa<llvm::CastInst>(user)) {
                 if (mayHaveAlias(user)) return true;
 
+            } else if (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(user)) {
+                if (gep->getPointerOperand() == val) {
+                    if (gep->hasAllZeroIndices()) return true;
+
+                    llvm::Type* valType = val->getType();
+                    llvm::Type* gepType = gep->getPointerOperandType();
+                    if (gepType->isVectorTy() || valType->isVectorTy())
+                        assert(0 && "i dont know what it is and when does it happen");
+                    if (gepType->getPrimitiveSizeInBits() < valType->getPrimitiveSizeInBits()) return true;
+                }
+
             } else if (auto inst = llvm::dyn_cast<llvm::Instruction>(user)) {
                 if (inst->mayWriteToMemory()) return true;
             }
@@ -555,6 +577,47 @@ class GraphAnalyzer {
         return true;
     }
 
+    void initializeLoopbacks() {
+        for (auto& pair : blockMapping) {
+            auto& vrblockPtr = pair.second;
+
+            for (auto& locationPtr : vrblockPtr->locations) {
+                if (locationPtr->predecessors.size() > 1) {
+
+                    std::set<VREdge*> loopBackEdges = BFS(locationPtr.get(),
+                                                          locationPtr->getPredLocations());
+                    for (VREdge * loopBackEdge : loopBackEdges) {
+                        loopBackEdge->loopsBack = true;
+                    }
+                }
+            }
+
+        }
+    }
+
+    std::set<VREdge*> BFS(VRLocation* from, const std::vector<VRLocation*>& searched) const {
+        std::set<VRLocation*> found  = { from };
+        std::vector<VRLocation*> toVisit{ from };
+
+        std::set<VREdge*> result;
+        while(! toVisit.empty()) {
+            VRLocation* current = toVisit.front();
+            toVisit.erase(toVisit.begin());
+
+            for (VREdge* succEdge : current->getSuccessors()) {
+                if (! succEdge->target) continue;
+
+                if (std::find(searched.begin(), searched.end(), succEdge->source) != searched.end())
+                    result.insert(succEdge);
+
+                else if (found.find(succEdge->target) == found.end()) {
+                    found.insert(succEdge->target);
+                    toVisit.push_back(succEdge->target);
+                }
+            }
+        }
+        return result;
+    }
 
 
 public:
@@ -563,6 +626,7 @@ public:
                   std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs)
                   : module(m), locationMapping(locs), blockMapping(blcs) {
         initializeFixedMemory();
+        initializeLoopbacks();
     }
 
     void analyze(unsigned maxPass) {
