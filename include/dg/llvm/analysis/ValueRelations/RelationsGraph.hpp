@@ -210,6 +210,8 @@ class RelationsGraph {
     std::set<std::unique_ptr<EqualityBucket>> buckets;
 	std::map<T, EqualityBucket*> mapToBucket;
 
+	std::map<EqualityBucket*, std::set<EqualityBucket*>> nonEqualities;
+
 	// map of pairs (a, b) such that {any of b} = load {any of a}
 	std::map<EqualityBucket*, EqualityBucket*> loads;
 
@@ -237,8 +239,9 @@ class RelationsGraph {
 		assert(0 && "no value in passed bucket");
 	}
 
-	bool hasRelations(const EqualityBucket* bucket) const {
+	bool hasRelations(EqualityBucket* bucket) const {
 		return getEqual(bucket).size() > 1
+				|| nonEqualities.find(bucket) != nonEqualities.end()
 				|| ! bucket->lesser.empty()
 				|| ! bucket->lesserEqual.empty()
 				|| ! bucket->parents.empty();
@@ -271,6 +274,11 @@ public:
 		for (auto& pair : other.mapToBucket)
 			mapToBucket.emplace(pair.first, oldToNewPtr.at(pair.second));
 
+		for (auto& pair : other.nonEqualities) {
+			auto returnPair = nonEqualities.emplace(oldToNewPtr.at(pair.first), pair.second);
+			substitueInSet(oldToNewPtr, returnPair.first->second);
+		}
+
 		for (auto& pair : other.loads)
 			loads.emplace(oldToNewPtr.at(pair.first), oldToNewPtr.at(pair.second));
 		
@@ -281,6 +289,7 @@ public:
 
 		swap(first.buckets, second.buckets);
 		swap(first.mapToBucket, second.mapToBucket);
+		swap(first.nonEqualities, second.nonEqualities);
 		swap(first.loads, second.loads);
 	}
 
@@ -291,6 +300,8 @@ public:
 	}
 
 	friend bool operator==(const RelationsGraph& lt, const RelationsGraph& rt) {
+		if (lt.nonEqualities != rt.nonEqualities) return false;
+
 		std::vector<T> ltVals = lt.getAllValues();
         std::vector<T> rtVals = rt.getAllValues();
 
@@ -344,6 +355,7 @@ public:
 		if (isEqual(lt, rt)) return;
 
 		// assert no conflicting relations
+		assert(! isNonEqual(lt, rt));
 		assert(! isLesser(lt, rt));
 		assert(! isLesser(rt, lt));
 
@@ -380,6 +392,28 @@ public:
 
 			oldBucketPtr = *it;
 
+			// replace nonEquality info to regard only remaining bucket
+			auto newNonEqIt = nonEqualities.find(newBucketPtr);
+			for (auto pairIt = nonEqualities.begin(); pairIt != nonEqualities.end(); ++pairIt) {
+
+				if (pairIt->first == oldBucketPtr) {
+					if (newNonEqIt != nonEqualities.end()) {
+						newNonEqIt->second.insert(pairIt->second.begin(), pairIt->second.end());
+					} else {
+						nonEqualities.emplace(newBucketPtr, pairIt->second);
+					}
+					pairIt = nonEqualities.erase(pairIt);
+				}
+
+				for (EqualityBucket* nonEqual : pairIt->second) {
+					if (nonEqual == oldBucketPtr) {
+						pairIt->second.emplace(newBucketPtr);
+						pairIt->second.erase(oldBucketPtr);
+						break;
+					}
+				}
+			}
+
 			// replace mapToBucket info to regard only remaining bucket
 			for (auto& pair : mapToBucket) {
 				if (pair.second == oldBucketPtr)
@@ -406,6 +440,30 @@ public:
 			// remove right
 			eraseUniquePtr(buckets, oldBucketPtr);
 		}
+	}
+
+	void setNonEqual(T lt, T rt) {
+
+		add(lt);
+		add(rt);
+
+		if (isNonEqual(lt, rt)) return;
+
+		// assert no conflicting relations
+		assert(! isEqual(lt, rt));
+
+		EqualityBucket* ltBucketPtr = mapToBucket.at(lt);
+		EqualityBucket* rtBucketPtr = mapToBucket.at(rt);
+
+		// TODO? handle lesserEqual specializing to lesser
+
+		auto foundLt = nonEqualities.find(ltBucketPtr);
+		if (foundLt != nonEqualities.end()) foundLt->second.emplace(rtBucketPtr);
+		else nonEqualities.emplace(ltBucketPtr, std::set<EqualityBucket*>{rtBucketPtr});
+
+		auto foundRt = nonEqualities.find(rtBucketPtr);
+		if (foundRt != nonEqualities.end()) foundRt->second.emplace(ltBucketPtr);
+		else nonEqualities.emplace(rtBucketPtr, std::set<EqualityBucket*>{ltBucketPtr});
 	}
 
 	void setLesser(T lt, T rt) {
@@ -441,6 +499,10 @@ public:
 		add(rt);
 
 		if (isLesserEqual(lt, rt) || isEqual(lt, rt) || isLesser(lt, rt)) return;
+		if (isNonEqual(lt, rt)) {
+			setLesser(lt, rt);
+			return;
+		}
 
 		// assert no conflicting relations
 		assert(! isLesser(rt, lt));
@@ -476,7 +538,7 @@ public:
 			loads.emplace(fromBucketPtr, valBucketPtr);
 		}
 		// TODO can there be a situation, in which the fact, that i can load
-		// same value from different pointer mean that the pointers are equal?
+		// same value from different pointer, means that the pointers are equal?
 	}
 
 	void unsetAllLoadsByPtr(T from) {
@@ -530,6 +592,11 @@ public:
 			// it severes all ties with the rest of the graph
 			valBucketPtr->disconnectAll();
 		}
+
+		nonEqualities.erase(valBucketPtr);
+		for (auto& pair : nonEqualities) {
+			pair.second.erase(valBucketPtr);
+		}
 	}
 
 	bool isEqual(T lt, T rt) const {
@@ -538,6 +605,20 @@ public:
 			return false;
 
 		return mapToBucket.at(lt) == mapToBucket.at(rt);
+	}
+
+	bool isNonEqual(T lt, T rt) const {
+
+		if (! areInGraph(lt, rt))
+			return false;
+
+		const auto& ltEqBucket = mapToBucket.at(lt);
+		const auto& rtEqBucket = mapToBucket.at(rt);
+
+		auto found = nonEqualities.find(ltEqBucket);
+		if (found == nonEqualities.end()) return false;
+
+		return found->second.find(rtEqBucket) != found->second.end();
 	}
 
 	bool isLesser(T lt, T rt) const {
@@ -713,6 +794,13 @@ public:
 		for (auto ptr : bucket->lesserEqual)
 			printInterleaved(stream, getEqual(ptr), " <= ", values);
 
+		auto foundNonEqual = nonEqualities.find(bucket);
+		if (foundNonEqual != nonEqualities.end()) {
+			for (EqualityBucket* nonEqual : foundNonEqual->second)
+				if (nonEqual < bucket)
+					printInterleaved(stream, getEqual(nonEqual), " != ", values);
+		}
+
 		//EqualityBucket* foundKey = findByValue(loads, bucket);
 		//if (foundKey)
 		//	printInterleaved(stream, values, " = LOAD ", getEqual(foundKey));
@@ -724,6 +812,7 @@ public:
 		if (bucket->lesser.empty() // values just equal and nothing else
 				&& bucket->lesserEqual.empty()
 				&& bucket->parents.empty()
+				&& foundNonEqual == nonEqualities.end()
 				&& ! findByValue(loads, bucket)
 				&& ! foundValue) {
 			printVals(stream, values);
