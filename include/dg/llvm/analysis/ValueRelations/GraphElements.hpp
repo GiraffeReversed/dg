@@ -117,14 +117,14 @@ struct VREdge {
 
     std::unique_ptr<VROp> op;
 
-    bool loopsBack = false;
-
     VREdge(VRLocation *s, VRLocation *t, std::unique_ptr<VROp>&& op)
     : source(s), target(t), op(std::move(op)) {}
 };
 
 struct VRLocation  {
     const unsigned id;
+
+    bool inCycle = false;
 
     RelationsGraph<const llvm::Value *> relations;
 

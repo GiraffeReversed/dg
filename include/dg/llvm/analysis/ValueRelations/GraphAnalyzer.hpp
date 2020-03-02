@@ -47,7 +47,12 @@ class GraphAnalyzer {
     const std::map<const llvm::Instruction *, VRLocation *>& locationMapping;
     const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping;
 
-    std::set<const llvm::Value*> fixedMemory;
+    // holds vector of instructions, which are processed on any path back to given location
+    // is computed only for locations with more than one predecessor
+    std::map<VRLocation*, std::vector<const llvm::Instruction*>> inloopValues;
+
+    // holds vector of values, which are defined at given location
+    std::map<VRLocation*, std::set<const llvm::Value*>> defined;
 
     bool processOperation(VRLocation* source, VRLocation* target, VROp* op) {
         if (! target) return false;
@@ -71,45 +76,76 @@ class GraphAnalyzer {
     }
 
     void forgetInvalidated(RelationsGraph& graph, const llvm::Instruction* inst) const {
-        if (! inst->mayWriteToMemory() && ! inst->mayHaveSideEffects()) return;
+
+        for (const llvm::Value* invalid : instructionInvalidates(graph, inst))
+            graph.unsetAllLoadsByPtr(invalid);
+    }
+
+     std::set<const llvm::Value*>
+     instructionInvalidates(const RelationsGraph& graph,
+                            const llvm::Instruction* inst) const {
+
+        if (! inst->mayWriteToMemory() && ! inst->mayHaveSideEffects())
+            return std::set<const llvm::Value*>();
         // DIFF does not ignore some intrinsic insts
+
+        // handle nondet_int individually just because
+        if (auto call = llvm::dyn_cast<llvm::CallInst>(inst)) {
+            auto function = call->getCalledFunction();
+            if (function && function->getName().equals("__VERIFIER_nondet_int"))
+                return std::set<const llvm::Value*>();
+        }
 
         if (! llvm::isa<llvm::StoreInst>(inst)) { // most probably CallInst
             // unable to presume anything about such instruction
-            graph.unsetAllLoads();
-            return;
+
+            std::set<const llvm::Value*> allFroms;
+            for (const auto& fromsValues : graph.getAllLoads()) {
+                allFroms.insert(fromsValues.first[0]);
+                // no need to add all froms, a sample is enough
+            }
+            return allFroms;
         }
 
-        auto store = llvm::dyn_cast<llvm::StoreInst>(inst);
+        std::set<const llvm::Value*> writtenTo;
+
+        auto store = llvm::cast<llvm::StoreInst>(inst);
         const llvm::Value* memoryPtr = stripCastsAndGEPs(store->getPointerOperand());
         // TODO check against actual loads generation
         // what if load information is stored about cast or gep?
 
         if (! eqivToAlloca(graph.getEqual(memoryPtr))) {
             // we can't tell, where the instruction writes to
-            // except that it can't be memory, that surely has no alias
+            //     except that it can't be memory, that surely has no alias
 
             for (const auto& fromsValues : graph.getAllLoads()) {
                 for (const llvm::Value* from : fromsValues.first) {
                     if (mayHaveAlias(llvm::cast<llvm::User>(from))) {
-                        graph.unsetAllLoadsByPtr(from);
+                        writtenTo.insert(from);
                         break;
                     } // else we may remember this load
                 }
             }
-            return;
+            return writtenTo;
         }
 
-        graph.unsetAllLoadsByPtr(memoryPtr); // unset underlying memory
-        graph.unsetAllLoadsByPtr(inst); // unset pointer itself
+        writtenTo.insert(memoryPtr); // unset underlying memory
+        writtenTo.insert(inst); // unset pointer itself
 
-        // unset all loads whose origin is unknown
+        // unset all loads whose origin is unknown and may have and alias
         //   (since they may be aliases of written location)
         for (const auto& fromsValues : graph.getAllLoads()) {
 
             if (! eqivToAlloca(fromsValues.first))
-                graph.unsetAllLoadsByPtr(fromsValues.first[0]); // aka first memoryPtr of bucket
+                for (const llvm::Value* from : fromsValues.first) {
+                    if (mayHaveAlias(llvm::cast<llvm::User>(from))) {
+                        writtenTo.insert(from);
+                        break;
+                    }
+                }
         }
+
+        return writtenTo;
     }
 
     const llvm::Value* stripCastsAndGEPs(const llvm::Value* memoryPtr) const {
@@ -315,7 +351,7 @@ class GraphAnalyzer {
                 newGraph.setEqual(op1, op2); break;
 
             case llvm::ICmpInst::Predicate::ICMP_NE:
-                break; // DANGER, no information doesn't mean nonequal
+                newGraph.setNonEqual(op1, op2); break;
 
             case llvm::ICmpInst::Predicate::ICMP_ULE:
             case llvm::ICmpInst::Predicate::ICMP_SLE:
@@ -427,20 +463,67 @@ class GraphAnalyzer {
             }
         }
 
-        for (const VRLocation* pred : preds) {
-            for (const auto& fromsValues : pred->relations.getAllLoads()) {
-                for (const llvm::Value* from : fromsValues.first) {
-                    if (fixedMemory.find(from) != fixedMemory.end()) {
-                        for (const auto& val : fromsValues.second) {
-                            newGraph.setLoad(from, val);
-                            // DANGER DIFF doesn't check whether value (not from) changes
-                        }
+        std::set<const llvm::Value*> allInvalid;
+
+        // if we are merging loop, not branches or function calls
+        // there may be invalidated loads
+        if (inloopValues.find(location) != inloopValues.end()) {
+
+            for (VRLocation* pred : preds) {
+                RelationsGraph& graph = pred->relations;
+
+                for (const llvm::Instruction* inst : inloopValues.at(location)) {
+                    auto invalid = instructionInvalidates(graph, inst);
+                    allInvalid.insert(invalid.begin(), invalid.end());
+                }
+            }
+        }
+
+        for (VRLocation* pred : preds) {
+            RelationsGraph& graph = pred->relations;
+            
+            for (const auto& fromsValues : graph.getAllLoads()) {
+                if (! anyInvalidated(allInvalid, fromsValues.first)) {
+                    for (auto from : fromsValues.first) {
+                        for (auto val : fromsValues.second)
+                            if (! hasConflictLoad(preds, from, val)
+                                    && isDefined(location, from) 
+                                    && isDefined(location, val))
+                                newGraph.setLoad(from, val);
                     }
                 }
             }
         }
 
         return andSwapIfChanged(location->relations, newGraph);
+    }
+
+    bool isDefined(VRLocation* loc, const llvm::Value* val) const {
+        auto definedHere = defined.at(loc);
+        return llvm::isa<llvm::Constant>(val) || definedHere.find(val) != definedHere.end();
+    }
+
+    bool hasConflictLoad(const std::vector<VRLocation*>& preds,
+                         const llvm::Value* from,
+                         const llvm::Value* val) {
+        for (const VRLocation* pred : preds) {
+            for (const auto& fromsValues : pred->relations.getAllLoads()) {
+                auto findFrom = std::find(fromsValues.first.begin(), fromsValues.first.end(), from);
+                auto findVal = std::find(fromsValues.second.begin(), fromsValues.second.end(), val);
+                
+                if (findFrom != fromsValues.first.end() && findVal == fromsValues.second.end())
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    bool anyInvalidated(const std::set<const llvm::Value*>& allInvalid,
+                        const std::vector<const llvm::Value*>& froms) {
+        for (auto from : froms) {
+            if (allInvalid.find(from) != allInvalid.end()) return true;
+        }
+        return false;
     }
 
     bool andSwapIfChanged(RelationsGraph& oldGraph, RelationsGraph& newGraph) {
@@ -512,21 +595,6 @@ class GraphAnalyzer {
         return changed;
     }
 
-    void initializeFixedMemory() {
-        for (const auto& function : module) {
-            for (const auto& block : function) {
-                for (const auto& inst : block) {
-
-                    if (auto alloca = llvm::dyn_cast<llvm::AllocaInst>(&inst)) {
-                        bool temp = false;
-                        if (! mayHaveAlias(alloca) && writtenMaxOnce(alloca, temp))
-                            fixedMemory.insert(alloca);
-                    }
-                }
-            }
-        }
-    }
-
     bool mayHaveAlias(const llvm::User* val) const {
         // if value is not pointer, we don't care whether there can be other name for same value
         if (! val->getType()->isPointerTy()) return false;
@@ -559,64 +627,135 @@ class GraphAnalyzer {
         return false;
     }
 
-    bool writtenMaxOnce(const llvm::User* val, bool& writtenAlready) const {
-        for (const llvm::User* user : val->users()) {
+    void findLoops() {
+        for (auto& pair : locationMapping) {
+            auto& locationPtr = pair.second;
+            if (locationPtr->predecessors.size() > 1) {
+                
+                auto forwardReach = genericReach(locationPtr, true);
+                auto backwardReach = genericReach(locationPtr, false);
 
-            if (llvm::isa<llvm::StoreInst>(user)) {
-                if (user->getOperand(1)->stripPointerCasts() == val) {
-                    if (writtenAlready) return false;
-                    writtenAlready = true;
+                std::vector<const llvm::Instruction*> loopReach;
+                std::set_intersection(forwardReach.begin(), forwardReach.end(),
+                                        backwardReach.begin(), backwardReach.end(),
+                                        std::back_inserter(loopReach));
+
+                for (auto inst : loopReach) {
+                    locationMapping.at(inst)->inCycle = true;
                 }
-            } else if (llvm::isa<llvm::CastInst>(user)) {
-                if (! writtenMaxOnce(user, writtenAlready)) return false;
 
-            } else if (auto inst = llvm::dyn_cast<llvm::Instruction>(user)) {
-                if (inst->mayWriteToMemory()) return false;
+                inloopValues.emplace(locationPtr, loopReach);
             }
-        }
-        return true;
-    }
-
-    void initializeLoopbacks() {
-        for (auto& pair : blockMapping) {
-            auto& vrblockPtr = pair.second;
-
-            for (auto& locationPtr : vrblockPtr->locations) {
-                if (locationPtr->predecessors.size() > 1) {
-
-                    std::set<VREdge*> loopBackEdges = BFS(locationPtr.get(),
-                                                          locationPtr->getPredLocations());
-                    for (VREdge * loopBackEdge : loopBackEdges) {
-                        loopBackEdge->loopsBack = true;
-                    }
-                }
-            }
-
         }
     }
 
-    std::set<VREdge*> BFS(VRLocation* from, const std::vector<VRLocation*>& searched) const {
-        std::set<VRLocation*> found  = { from };
-        std::vector<VRLocation*> toVisit{ from };
+    std::set<const llvm::Instruction*> genericReach(VRLocation* from, bool goForward) {
+        std::set<VRLocation*> found = { from };
+        std::list<VRLocation*> toVisit = { from };
 
-        std::set<VREdge*> result;
-        while(! toVisit.empty()) {
+        std::set<const llvm::Instruction*> result;
+        while (! toVisit.empty()) {
             VRLocation* current = toVisit.front();
-            toVisit.erase(toVisit.begin());
+            toVisit.pop_front();
 
-            for (VREdge* succEdge : current->getSuccessors()) {
-                if (! succEdge->target) continue;
+            auto nextEdges = goForward ? current->getSuccessors() : current->getPredecessors();
+            for (VREdge* nextEdge : nextEdges) {
+                if (! nextEdge->target) continue;
 
-                if (std::find(searched.begin(), searched.end(), succEdge->source) != searched.end())
-                    result.insert(succEdge);
+                if (auto op = dynamic_cast<VRInstruction*>(nextEdge->op.get()))
+                    result.insert(op->getInstruction());
 
-                else if (found.find(succEdge->target) == found.end()) {
-                    found.insert(succEdge->target);
-                    toVisit.push_back(succEdge->target);
+                auto nextLocation = goForward ? nextEdge->target : nextEdge->source;
+                if (found.find(nextLocation) == found.end()) {
+                    found.insert(nextLocation);
+                    toVisit.push_back(nextLocation);
                 }
             }
         }
         return result;
+    }
+
+    void initializeDefined() {
+        bool changed;
+        do {
+            changed = false;
+            for (const llvm::Function& function : module) {
+                if (function.isDeclaration()) continue;
+
+                auto& block = function.getEntryBlock();
+                VRBBlock* vrblock = blockMapping.at(&block).get();
+
+                std::set<VRLocation*> found = { vrblock->first() };
+                std::list<VRLocation*> toVisit = { vrblock->first() };
+
+                std::set<const llvm::Value*> temp;
+                for (auto& arg : function.args())
+                    temp.emplace(&arg);
+                defined.emplace(vrblock->first(), temp);
+
+                while (! toVisit.empty()) {
+                    VRLocation* current = toVisit.front();
+                    toVisit.pop_front();
+
+                    for (VREdge* succEdge : current->getSuccessors()) {
+
+                        VRLocation* succLoc = succEdge->target;
+                        if (! succLoc) continue;
+
+                        auto definedSucc = defined.find(succLoc);
+                        if (definedSucc == defined.end())
+                            std::tie(definedSucc, changed) = defined.emplace(succLoc,
+                                                        std::set<const llvm::Value*>());
+                        
+                        if(! definedSucc->second.empty()
+                                && succLoc->inCycle
+                                && current->getPredecessors()[0]->source->inCycle)
+                            continue;
+
+                        auto& definedHere = defined.at(current);
+                        for (const llvm::Value* defined : definedHere)
+                            changed |= definedSucc->second.emplace(defined).second;
+
+                        if (auto op = dynamic_cast<VRInstruction*>(succEdge->op.get()))
+                            changed |= definedSucc->second.emplace(op->getInstruction()).second;
+
+                        if (found.find(succLoc) == found.end()) {
+                            found.emplace(succLoc);
+                            toVisit.push_back(succLoc);
+                        }
+
+                        for (auto def : defined.at(succLoc)) {
+                            std::cerr << debug::getValName(def) << std::endl;
+                        }
+                        std::cerr << std::endl;
+                    }
+                }
+            }
+
+            // pass definitions from function calls
+            for (const llvm::Function& function : module) {
+                if (function.isDeclaration()) continue;
+                VRBBlock* entryBlock = blockMapping.at(&function.getEntryBlock()).get();
+                VRLocation* entryLoc = entryBlock->first();
+
+                auto& definedHere = defined.at(entryLoc);
+
+                for (const llvm::User* call : function.users()) {
+                    VRLocation* callLocation = locationMapping.at(
+                        static_cast<const llvm::Instruction*>(call));
+                    auto definedAtCall = defined.at(callLocation);
+
+                    for (const llvm::Value* defined : definedAtCall)
+                        changed |= definedHere.emplace(defined).second;
+                }
+
+                std::cerr << "[entry after passing]" << std::endl;
+                for (auto defined : definedHere) {
+                    std::cerr << debug::getValName(defined) << std::endl;
+                }
+                std::cerr << std::endl;
+            }
+        } while (changed);
     }
 
 
@@ -625,8 +764,8 @@ public:
                   std::map<const llvm::Instruction *, VRLocation *>& locs,
                   std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs)
                   : module(m), locationMapping(locs), blockMapping(blcs) {
-        initializeFixedMemory();
-        initializeLoopbacks();
+        findLoops();
+        initializeDefined();
     }
 
     void analyze(unsigned maxPass) {
