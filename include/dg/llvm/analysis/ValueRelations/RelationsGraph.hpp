@@ -202,6 +202,22 @@ class EqualityBucket {
 		for (EqualityBucket* lesserEqualPtr : lesserEqual)
 			lesserEqualPtr->searchForLesser(acc);
 	}
+
+	void getRelatedBuckets(std::vector<EqualityBucket*>& acc, bool goDown) {
+		BucketPtrSet nextBuckets;
+		if (goDown) {
+			nextBuckets.insert(lesserEqual.begin(), lesserEqual.end());
+			nextBuckets.insert(lesser.begin(), lesser.end());
+		} else {
+			nextBuckets.insert(parents.begin(), parents.end());
+		}
+
+		acc.insert(acc.end(), nextBuckets.begin(), nextBuckets.end());
+
+		for (EqualityBucket* bucket : nextBuckets) {
+			bucket->getRelatedBuckets(acc, goDown);
+		}		
+	}
 };
 
 template <typename T>
@@ -319,6 +335,17 @@ public:
 					(lt.isLesser(snd, fst) && ! rt.isLesser(snd, fst)) ||
 					(lt.isLesserEqual(fst, snd) && ! rt.isLesserEqual(fst, snd)) ||
 					(lt.isLesserEqual(snd, fst) && ! rt.isLesserEqual(snd, fst)))
+					return false;
+            }
+        }
+
+		for (auto& fst : rtVals) {
+            for (auto& snd : rtVals) {
+                if ((rt.isEqual(fst, snd) && ! lt.isEqual(fst, snd)) ||
+				    (rt.isLesser(fst, snd) && ! lt.isLesser(fst, snd)) ||
+					(rt.isLesser(snd, fst) && ! lt.isLesser(snd, fst)) ||
+					(rt.isLesserEqual(fst, snd) && ! lt.isLesserEqual(fst, snd)) ||
+					(rt.isLesserEqual(snd, fst) && ! lt.isLesserEqual(snd, fst)))
 					return false;
             }
         }
@@ -525,6 +552,8 @@ public:
 		add(val);
 		add(from);
 
+		if (isLoad(from, val)) return;
+
 		EqualityBucket* valBucketPtr = mapToBucket.at(val);
 		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
 
@@ -651,6 +680,14 @@ public:
 		return found != loads.end() && valBucketPtr == found->second;
 	}
 
+	bool hasLoad(T from) const {
+		if (! inGraph(from)) return false;
+
+		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
+
+		return loads.find(fromBucketPtr) != loads.end(); 
+	}
+
 	std::vector<T> getEqual(T val) const {
 		std::vector<T> result;
 		if (mapToBucket.find(val) == mapToBucket.end()) {
@@ -697,6 +734,33 @@ public:
 		for (EqualityBucket* bucketPtr : acc) {
 			result.push_back(getAny(bucketPtr));
 		}
+		return result;
+	}
+
+	std::vector<T> getAllRelated(T val) const {
+		if (! inGraph(val)) return std::vector<T>();
+
+		EqualityBucket* valBucket = mapToBucket.at(val);
+
+		std::vector<T> result = getEqual(valBucket);
+
+		auto found = nonEqualities.find(valBucket);
+		if (found != nonEqualities.end()) {
+			for (EqualityBucket* nonEqual : found->second) {
+				std::vector<T> vals = getEqual(nonEqual);
+				result.insert(result.end(), vals.begin(), vals.end());
+			}
+		}
+
+		std::vector<EqualityBucket*> buckets;
+		valBucket->getRelatedBuckets(buckets, true);
+		valBucket->getRelatedBuckets(buckets, false);
+
+		for (EqualityBucket* bucket : buckets) {
+			std::vector<T> vals = getEqual(bucket);
+			result.insert(result.end(), vals.begin(), vals.end());
+		}
+
 		return result;
 	}
 

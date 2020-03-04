@@ -444,6 +444,14 @@ class GraphAnalyzer {
         return true;
     }
 
+    bool loadsSomethingInAll(const std::vector<VRLocation*>& locations, const llvm::Value* from) const {
+        for (const VRLocation* vrloc : locations) {
+            if (! vrloc->relations.hasLoad(from))
+                return false;
+        }
+        return true;
+    }
+
     bool mergeLoads(VRLocation* location) {
         return mergeLoads(location->getPredLocations(), location);
     }
@@ -459,6 +467,76 @@ class GraphAnalyzer {
                 for (const llvm::Value* val : fromsValues.second) {
                     if (loadsInAll(preds, from, val))
                         newGraph.setLoad(from, val);
+                }
+            }
+        }
+
+        if (preds.size() == 2 && preds[0]->inLoop != preds[1]->inLoop) {
+            for (const auto& fromsValues : loadBucketPairs) {
+                for (const llvm::Value* from : fromsValues.first) {
+                    if (loadsSomethingInAll(preds, from)) {
+                        std::cerr << "[from]" << debug::getValName(from) << std::endl;
+
+                        VRLocation* outloopPred = preds[0]->inLoop ? preds[1] : preds[0];
+                        VRLocation* inloopPred  = preds[0]->inLoop ? preds[0] : preds[1];
+
+                        const llvm::Value* valInloop
+                            = inloopPred->relations.getValsByPtr(from)[0];
+
+                        std::vector<const llvm::Value*> allRelated
+                            = inloopPred->relations.getAllRelated(valInloop);
+
+                        std::cerr << "[valInloop]" << debug::getValName(valInloop) << std::endl;
+                        std::cerr << "[allRelated]" << std::endl;
+                        for (auto related : allRelated) {
+                            std::cerr << "    " << debug::getValName(related) << std::endl;
+                        }
+                        std::cerr << std::endl;
+
+                        // get vector of values, that are both related to value loaded from
+                        // from at the end of the loop and at the same time are loads
+                        // from from in given loop
+                        const llvm::Value* firstLoadInLoop = nullptr;
+                        for (const llvm::Value* val : inloopValues.at(location)) {
+                            std::cerr << "[inloopVal]" << debug::getValName(val) << std::endl;
+                            if (std::find(allRelated.begin(), allRelated.end(), val)
+                                    != allRelated.end()) {
+                                if (auto store = llvm::dyn_cast<llvm::StoreInst>(val)) {
+                                    if (store->getPointerOperand() == from) break;
+                                }
+                                if (auto load = llvm::dyn_cast<llvm::LoadInst>(val)) {
+                                    if (load->getPointerOperand() == from) {
+                                        firstLoadInLoop = load;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        std::cerr << std::endl;
+
+                        // get all equal vals from load from outloopPred
+                        std::vector<const llvm::Value*> valsOutloop
+                            = outloopPred->relations.getValsByPtr(from);
+                        for (const llvm::Value* val : valsOutloop) {
+                            std::cerr << "[valOutloop]" << debug::getValName(val) << std::endl;
+                            location->relations.setEqual(valsOutloop[0], val);
+                        }
+                        std::cerr << std::endl;
+
+                        // set all preserved relations
+                        if (firstLoadInLoop) {
+                            if (inloopPred->relations.isLesser(firstLoadInLoop, valInloop)) {
+                                newGraph.setLesserEqual(valsOutloop[0], firstLoadInLoop);
+                                newGraph.setLoad(from, firstLoadInLoop);
+                            }
+                            if (inloopPred->relations.isLesser(valInloop, firstLoadInLoop)) {
+                                newGraph.setLesserEqual(firstLoadInLoop, valsOutloop[0]);
+                                newGraph.setLoad(from, firstLoadInLoop);
+                            }
+                        }
+
+
+                    }
                 }
             }
         }
@@ -487,8 +565,9 @@ class GraphAnalyzer {
                     for (auto from : fromsValues.first) {
                         for (auto val : fromsValues.second)
                             if (! hasConflictLoad(preds, from, val)
-                                    && isDefined(location, from) 
-                                    && isDefined(location, val))
+                                    //&& isDefined(location, from)
+                                    //&& isDefined(location, val))
+                                )
                                 newGraph.setLoad(from, val);
                     }
                 }
@@ -635,25 +714,27 @@ class GraphAnalyzer {
                 auto forwardReach = genericReach(locationPtr, true);
                 auto backwardReach = genericReach(locationPtr, false);
 
-                std::vector<const llvm::Instruction*> loopReach;
-                std::set_intersection(forwardReach.begin(), forwardReach.end(),
-                                        backwardReach.begin(), backwardReach.end(),
-                                        std::back_inserter(loopReach));
+                auto inloopValuesIt = inloopValues.emplace(locationPtr,
+                                std::vector<const llvm::Instruction*>()).first;
 
-                for (auto inst : loopReach) {
-                    locationMapping.at(inst)->inCycle = true;
+                std::vector<VREdge*> loopReach;
+                for (auto edge : forwardReach) {
+                    if (std::find(backwardReach.begin(), backwardReach.end(), edge)
+                            != backwardReach.end()) {
+                        edge->target->inLoop = true;
+                        if (auto op = dynamic_cast<VRInstruction*>(edge->op.get()))
+                            inloopValuesIt->second.emplace_back(op->getInstruction());
+                    }
                 }
-
-                inloopValues.emplace(locationPtr, loopReach);
             }
         }
     }
 
-    std::set<const llvm::Instruction*> genericReach(VRLocation* from, bool goForward) {
+    std::vector<VREdge*> genericReach(VRLocation* from, bool goForward) {
         std::set<VRLocation*> found = { from };
         std::list<VRLocation*> toVisit = { from };
 
-        std::set<const llvm::Instruction*> result;
+        std::vector<VREdge*> result;
         while (! toVisit.empty()) {
             VRLocation* current = toVisit.front();
             toVisit.pop_front();
@@ -662,9 +743,8 @@ class GraphAnalyzer {
             for (VREdge* nextEdge : nextEdges) {
                 if (! nextEdge->target) continue;
 
-                if (auto op = dynamic_cast<VRInstruction*>(nextEdge->op.get()))
-                    result.insert(op->getInstruction());
-
+                result.emplace_back(nextEdge);
+                
                 auto nextLocation = goForward ? nextEdge->target : nextEdge->source;
                 if (found.find(nextLocation) == found.end()) {
                     found.insert(nextLocation);
@@ -708,8 +788,7 @@ class GraphAnalyzer {
                                                         std::set<const llvm::Value*>());
                         
                         if(! definedSucc->second.empty()
-                                && succLoc->inCycle
-                                && current->getPredecessors()[0]->source->inCycle)
+                                && current->inLoop)
                             continue;
 
                         auto& definedHere = defined.at(current);
