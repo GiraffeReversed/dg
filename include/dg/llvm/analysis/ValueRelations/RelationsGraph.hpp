@@ -29,8 +29,8 @@ bool contains(const std::set<Val>& set, const Val& val) {
 }
 
 template <typename T>
-typename std::set<std::unique_ptr<T>>::iterator findPtr(const std::set<std::unique_ptr<T>>& haystack,
-														const T* const needle) {
+auto findPtr(const std::vector<std::unique_ptr<T>>& haystack,
+								const T* const needle) -> decltype(haystack.begin()) {
 	auto it = haystack.begin();
 	
 	while (it != haystack.end()) {
@@ -43,7 +43,7 @@ typename std::set<std::unique_ptr<T>>::iterator findPtr(const std::set<std::uniq
 }
 
 template <typename T>
-void eraseUniquePtr(std::set<std::unique_ptr<T>>& set, const T* const value) {
+void eraseUniquePtr(std::vector<std::unique_ptr<T>>& set, const T* const value) {
 	auto ite = findPtr(set, value);
 	assert (ite != set.end());
 	set.erase(ite);
@@ -223,7 +223,7 @@ class EqualityBucket {
 template <typename T>
 class RelationsGraph {
 
-    std::set<std::unique_ptr<EqualityBucket>> buckets;
+    std::vector<std::unique_ptr<EqualityBucket>> buckets;
 	std::map<T, EqualityBucket*> mapToBucket;
 
 	std::map<EqualityBucket*, std::set<EqualityBucket*>> nonEqualities;
@@ -277,7 +277,7 @@ public:
 			assert(bucketUniquePtr.get());
 			
 			EqualityBucket* newBucketPtr = new EqualityBucket(*bucketUniquePtr);
-			buckets.emplace(newBucketPtr);
+			buckets.emplace_back(newBucketPtr);
 
 			oldToNewPtr.emplace(bucketUniquePtr.get(), newBucketPtr);
 		}
@@ -364,7 +364,7 @@ public:
 		if (mapToBucket.find(val) != mapToBucket.end()) return;
 
 		EqualityBucket* newBucketPtr = new EqualityBucket;
-		buckets.emplace(newBucketPtr);
+		buckets.emplace_back(newBucketPtr);
 		mapToBucket.emplace(val, newBucketPtr);
 	}
 
@@ -820,7 +820,10 @@ public:
 		printVals(stream, v1);
 		stream << sep;
 		printVals(stream, v2);
-		stream << std::endl;
+		if (&stream == &std::cout)
+			stream << "\\r";
+		else
+			stream << std::endl;
 	}
 
 	void dump() {
