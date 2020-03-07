@@ -231,6 +231,8 @@ class RelationsGraph {
 	// map of pairs (a, b) such that {any of b} = load {any of a}
 	std::map<EqualityBucket*, EqualityBucket*> loads;
 
+	std::vector<RelationsGraph> xorRelations;
+
 	bool inGraph(T val) const {
 		return contains(mapToBucket, val);
 	}
@@ -267,7 +269,7 @@ public:
 
 	RelationsGraph() = default;
 	
-	RelationsGraph(const RelationsGraph& other) {
+	RelationsGraph(const RelationsGraph& other): xorRelations(other.xorRelations) {
 
 		std::map<EqualityBucket*, EqualityBucket*> oldToNewPtr;
 
@@ -307,6 +309,7 @@ public:
 		swap(first.mapToBucket, second.mapToBucket);
 		swap(first.nonEqualities, second.nonEqualities);
 		swap(first.loads, second.loads);
+		swap(first.xorRelations, second.xorRelations);
 	}
 
 	RelationsGraph& operator=(RelationsGraph other) {
@@ -353,7 +356,9 @@ public:
 		std::set<std::pair<std::vector<T>, std::vector<T>>> ltLoads = lt.getAllLoads();
 		std::set<std::pair<std::vector<T>, std::vector<T>>> rtLoads = rt.getAllLoads();
 
-		return ltLoads == rtLoads;
+		if (ltLoads != rtLoads) return false;
+
+		return lt.xorRelations == rt.xorRelations;
 	}
 
 	friend bool operator!=(const RelationsGraph& lt, const RelationsGraph& rt) {
@@ -796,6 +801,27 @@ public:
 		return result;
 	}
 
+	RelationsGraph& newXorRelation() {
+		xorRelations.emplace_back();
+		return xorRelations.back();
+	}
+
+	std::vector<RelationsGraph>& getXorRelations() {
+		return xorRelations;
+	}
+
+	bool hasXorRelation(const RelationsGraph& otherGraph) {
+		for (const RelationsGraph& thisGraph : xorRelations) {
+			if (thisGraph == otherGraph) return true;
+		}
+		return false;
+	}
+
+	void addXorRelation(const RelationsGraph& otherGraph) {
+		if (! hasXorRelation(otherGraph))
+			xorRelations.emplace_back(otherGraph);
+	}
+
 #ifndef NDEBUG
 	std::string strip(std::string str) const {
 		std::string result;
@@ -893,6 +919,12 @@ public:
 		for (const auto& bucketPtr : buckets) {
 			dump(stream, bucketPtr.get());
 		}
+
+		for (auto& rg : xorRelations) {
+			stream << std::endl << "XOR relations" << std::endl;
+			rg.generalDump(stream);
+		}
+
     }
 #endif
 

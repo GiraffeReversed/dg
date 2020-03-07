@@ -473,8 +473,11 @@ class GraphAnalyzer {
                     if (oldGraph.isLesserEqual(snd, fst)) newGraph.setLesserEqual(snd, fst);
                 }
             }
+        }
 
-
+        for (VRLocation* pred : preds) {
+            for (const RelationsGraph& xorGraph : pred->relations.getXorRelations())
+                newGraph.addXorRelation(xorGraph);
         }
 
         return andSwapIfChanged(location->relations, newGraph);
@@ -658,6 +661,45 @@ class GraphAnalyzer {
         return true;
     }
 
+    void pairFormalAndRealArguments() {
+        for (const llvm::Function& function : module) {
+            if (function.isDeclaration())
+                continue;
+            
+            VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
+            assert(vrblockOfEntry);
+
+            RelationsGraph newGraph = vrblockOfEntry->first()->relations;
+
+            // for each location, where the function is called
+            for (const llvm::Value* user : function.users()) {
+
+                // get call from user
+                const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
+                if (! call) continue;
+
+                // create xorGraph if neccessary
+                RelationsGraph* xorGraph;
+                if (function.getNumUses() > 1)
+                    xorGraph = &newGraph.newXorRelation();
+                else
+                    xorGraph = &newGraph;
+
+                // set real parameters equal to formal
+                unsigned argCount = 0;
+                for (const llvm::Argument& receivedArg : function.args()) {
+                    if (argCount > call->getNumArgOperands()) break;
+                    const llvm::Value* sentArg = call->getArgOperand(argCount);
+
+                    xorGraph->setEqual(sentArg, &receivedArg);
+
+                    ++argCount;
+                }
+            }
+            andSwapIfChanged(vrblockOfEntry->first()->relations, newGraph);
+        }
+    }
+
     bool passCallSiteRelations() {
         bool changed = false;
 
@@ -668,28 +710,20 @@ class GraphAnalyzer {
             VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
             assert(vrblockOfEntry);
 
+            RelationsGraph newGraph = vrblockOfEntry->first()->relations;
+
             // for each location, where the function is called
             std::vector<VRLocation*> callLocs;
             for (const llvm::Value* user : function.users()) {
+
+                // get call from user
                 const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
                 if (! call) continue;
 
+                // remember call for merging of loads and relations
                 VRLocation* vrlocOfCall = locationMapping.at(call);
                 assert(vrlocOfCall);
                 callLocs.push_back(vrlocOfCall);
-
-                RelationsGraph newGraph = vrblockOfEntry->first()->relations;
-
-                unsigned argCount = 0;
-                for (const llvm::Argument& receivedArg : function.args()) {
-                    if (argCount > call->getNumArgOperands()) break;
-                    const llvm::Value* sentArg = call->getArgOperand(argCount);
-
-                    newGraph.setEqual(sentArg, &receivedArg);
-                    // DANGER, if function is called multiple times, all it's parameters are set equal
-                    ++argCount;
-                }
-                changed |= andSwapIfChanged(vrblockOfEntry->first()->relations, newGraph);
             }
             changed |= mergeRelations(callLocs, vrblockOfEntry->first());
             changed |= mergeLoads(callLocs, vrblockOfEntry->first());
@@ -988,6 +1022,8 @@ public:
     }
 
     void analyze(unsigned maxPass) {
+
+        pairFormalAndRealArguments();
 
         bool changed = true;
         unsigned passNum = 0;
