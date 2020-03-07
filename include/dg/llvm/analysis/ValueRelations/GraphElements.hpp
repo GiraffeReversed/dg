@@ -86,7 +86,7 @@ struct VRAssumeBool : public VRAssume {
 #ifndef NDEBUG
     void dump() const override {
         VRAssume::dump();
-        std::cout << (assumption ? "true" : "false") << std::endl;
+        std::cout << (assumption ? "true" : "false");
     }
 #endif
 };
@@ -104,18 +104,28 @@ struct VRAssumeEqual : public VRAssume {
 #ifndef NDEBUG
     void dump() const override {
         VRAssume::dump();
-        std::cout << debug::getValName(assumption) << std::endl;
+        std::cout << debug::getValName(assumption);
     }
 #endif
 };
 
 struct VRLocation;
 
+enum EdgeType {
+    TREE,
+    BACK,
+    FORWARD,
+    DEFAULT
+    // DANGER ignores cross
+};
+
 struct VREdge {
     VRLocation *source;
     VRLocation *target;
 
     std::unique_ptr<VROp> op;
+
+    EdgeType type = EdgeType::DEFAULT;
 
     VREdge(VRLocation *s, VRLocation *t, std::unique_ptr<VROp>&& op)
     : source(s), target(t), op(std::move(op)) {}
@@ -124,7 +134,7 @@ struct VREdge {
 struct VRLocation  {
     const unsigned id;
 
-    bool inCycle = false;
+    bool inLoop = false;
 
     RelationsGraph<const llvm::Value *> relations;
 

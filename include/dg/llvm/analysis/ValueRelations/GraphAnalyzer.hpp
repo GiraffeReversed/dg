@@ -114,6 +114,10 @@ class GraphAnalyzer {
         // TODO check against actual loads generation
         // what if load information is stored about cast or gep?
 
+        // DANGER TODO unset everything in between too
+        writtenTo.insert(memoryPtr); // unset underlying memory
+        writtenTo.insert(store->getPointerOperand()); // unset pointer itself
+
         if (! eqivToAlloca(graph.getEqual(memoryPtr))) {
             // we can't tell, where the instruction writes to
             //     except that it can't be memory, that surely has no alias
@@ -128,9 +132,6 @@ class GraphAnalyzer {
             }
             return writtenTo;
         }
-
-        writtenTo.insert(memoryPtr); // unset underlying memory
-        writtenTo.insert(inst); // unset pointer itself
 
         // unset all loads whose origin is unknown and may have and alias
         //   (since they may be aliases of written location)
@@ -175,8 +176,26 @@ class GraphAnalyzer {
     void gepGen(RelationsGraph& graph, const llvm::GetElementPtrInst* gep) {
         if (gep->hasAllZeroIndices())
             graph.setEqual(gep, gep->getPointerOperand());
+
+        for (auto& fromsValues : graph.getAllLoads()) {
+            for (const llvm::Value* from : fromsValues.first) {
+                if (auto otherGep = llvm::dyn_cast<llvm::GetElementPtrInst>(from)) {
+                    if (allGepParametersAreEqual(graph, gep, otherGep))
+                        graph.setEqual(gep, otherGep);
+                }
+            }
+        }
         // TODO something more?
         // indices method gives iterator over indices
+    }
+
+    bool allGepParametersAreEqual(const RelationsGraph& graph,
+                                  const llvm::GetElementPtrInst* gepOne,
+                                  const llvm::GetElementPtrInst* gepTwo) const {
+        for (int i = 0; i < fmin(gepOne->getNumOperands(), gepTwo->getNumOperands()); i++) {
+            if (! graph.isEqual(gepOne->getOperand(i), gepTwo->getOperand(i))) return false;
+        }
+        return true;
     }
 
     void extGen(RelationsGraph& graph, const llvm::CastInst* ext) {
@@ -432,6 +451,32 @@ class GraphAnalyzer {
             }
         }
 
+        if (isLoopJoin(location) && ! isBranchJoin(location)) {
+            VRLocation* outloopPred = nullptr;
+
+            for (VREdge* predEdge : location->predecessors) {
+                if (predEdge->type == EdgeType::TREE) outloopPred = predEdge->source;
+            }
+            assert(outloopPred);
+
+            const RelationsGraph& oldGraph = outloopPred->relations;
+            std::vector<const llvm::Value*> values = oldGraph.getAllValues();
+
+            for (const llvm::Value* fst : values) {
+                for (const llvm::Value* snd : values) {
+                    if (fst == snd) continue;
+
+                    if (oldGraph.isEqual(fst, snd)) newGraph.setEqual(fst, snd);
+                    if (oldGraph.isLesser(fst, snd)) newGraph.setLesser(fst, snd);
+                    if (oldGraph.isLesser(snd, fst)) newGraph.setLesser(snd, fst);
+                    if (oldGraph.isLesserEqual(fst, snd)) newGraph.setLesserEqual(fst, snd);
+                    if (oldGraph.isLesserEqual(snd, fst)) newGraph.setLesserEqual(snd, fst);
+                }
+            }
+
+
+        }
+
         return andSwapIfChanged(location->relations, newGraph);
     }
 
@@ -566,7 +611,7 @@ class GraphAnalyzer {
                         for (auto val : fromsValues.second)
                             if (! hasConflictLoad(preds, from, val)
                                     //&& isDefined(location, from)
-                                    //&& isDefined(location, val))
+                                    //&& isDefined(location, val)
                                 )
                                 newGraph.setLoad(from, val);
                     }
@@ -706,24 +751,96 @@ class GraphAnalyzer {
         return false;
     }
 
+    void categorizeEdges() {
+        for (auto& function : module) {
+            if (function.isDeclaration()) continue;
+
+            VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
+            assert(vrblockOfEntry);
+
+            VRLocation* first = vrblockOfEntry->first();
+
+            std::vector<std::pair<VRLocation*, int>> stack;
+            std::set<VRLocation*> found;
+
+            stack.emplace_back(first, 0);
+            found.emplace(first);
+
+            VRLocation* current;
+            unsigned succIndex;
+            while (! stack.empty()) {
+                std::tie(current, succIndex) = stack.back();
+                stack.pop_back();
+
+                // check if there is next successor
+                if (current->successors.size() <= succIndex)
+                    continue;
+
+                VREdge* succEdge = current->getSuccessors()[succIndex];
+                VRLocation* successor = succEdge->target;
+
+                // if there is, plan return
+                stack.emplace_back(current, ++succIndex);
+
+                if (! successor) {
+                    succEdge->type = EdgeType::TREE;
+                    continue;
+                }
+
+                // if successor was already searched, we can at least gorize the edge
+                if (found.find(successor) != found.end()) {
+                    std::vector<VRLocation*> mockStack;
+                    for (auto& locIndex : stack)
+                        mockStack.push_back(locIndex.first);
+
+                    if (std::find(mockStack.begin(), mockStack.end(), successor) != mockStack.end())
+                        succEdge->type = EdgeType::BACK;
+                    else
+                        succEdge->type = EdgeType::FORWARD;
+                    continue;
+                }
+
+                // plan visit to successor
+                stack.emplace_back(successor, 0);
+                found.emplace(successor);
+                succEdge->type = EdgeType::TREE;
+            }
+
+        }
+    }
+
     void findLoops() {
         for (auto& pair : locationMapping) {
             auto& locationPtr = pair.second;
-            if (locationPtr->predecessors.size() > 1) {
+            std::vector<VREdge*>& predEdges = locationPtr->predecessors;
+            if (predEdges.size() > 1) {
+
+                if (isBranchJoin(locationPtr) && ! isLoopJoin(locationPtr)) continue;
+
+                std::vector<VREdge*> treeEdges;
+                for (auto it = predEdges.begin(); it != predEdges.end(); ++it) {
+                    if ((*it)->type == EdgeType::TREE) {
+                        treeEdges.emplace_back(*it);
+                        predEdges.erase(it);
+                    }
+                }
                 
                 auto forwardReach = genericReach(locationPtr, true);
                 auto backwardReach = genericReach(locationPtr, false);
 
+                for (VREdge* predEdge : treeEdges)
+                    predEdges.emplace_back(predEdge);
+
                 auto inloopValuesIt = inloopValues.emplace(locationPtr,
                                 std::vector<const llvm::Instruction*>()).first;
 
-                std::vector<VREdge*> loopReach;
                 for (auto edge : forwardReach) {
                     if (std::find(backwardReach.begin(), backwardReach.end(), edge)
                             != backwardReach.end()) {
                         edge->target->inLoop = true;
-                        if (auto op = dynamic_cast<VRInstruction*>(edge->op.get()))
+                        if (auto op = dynamic_cast<VRInstruction*>(edge->op.get())) {
                             inloopValuesIt->second.emplace_back(op->getInstruction());
+                        }
                     }
                 }
             }
@@ -744,7 +861,7 @@ class GraphAnalyzer {
                 if (! nextEdge->target) continue;
 
                 result.emplace_back(nextEdge);
-                
+
                 auto nextLocation = goForward ? nextEdge->target : nextEdge->source;
                 if (found.find(nextLocation) == found.end()) {
                     found.insert(nextLocation);
@@ -753,6 +870,20 @@ class GraphAnalyzer {
             }
         }
         return result;
+    }
+
+    bool isBranchJoin(const VRLocation* location) const {
+        for (VREdge* pred : location->predecessors) {
+            if (pred->type == EdgeType::FORWARD) return true;
+        }
+        return false;
+    }
+
+    bool isLoopJoin(const VRLocation* location) const {
+        for (VREdge* pred : location->predecessors) {
+            if (pred->type == EdgeType::BACK) return true;
+        }
+        return false;
     }
 
     void initializeDefined() {
@@ -777,18 +908,26 @@ class GraphAnalyzer {
                     VRLocation* current = toVisit.front();
                     toVisit.pop_front();
 
+                    //std::set<VRLocation*> backwardReach;
+                    //for (VREdge* edge : genericReach(current, false)) {
+                    //    backwardReach.insert(edge->source);
+                    //    if (edge->target) backwardReach.insert(edge->target);
+                    //}
+
+
                     for (VREdge* succEdge : current->getSuccessors()) {
 
                         VRLocation* succLoc = succEdge->target;
                         if (! succLoc) continue;
 
                         auto definedSucc = defined.find(succLoc);
-                        if (definedSucc == defined.end())
+                        if (definedSucc == defined.end() || ! current->inLoop)
                             std::tie(definedSucc, changed) = defined.emplace(succLoc,
                                                         std::set<const llvm::Value*>());
                         
-                        if(! definedSucc->second.empty()
-                                && current->inLoop)
+
+                        if(! definedSucc->second.empty())
+                                //&& backwardReach.find(succLoc) != backwardReach.end())
                             continue;
 
                         auto& definedHere = defined.at(current);
@@ -803,10 +942,10 @@ class GraphAnalyzer {
                             toVisit.push_back(succLoc);
                         }
 
-                        for (auto def : defined.at(succLoc)) {
-                            std::cerr << debug::getValName(def) << std::endl;
-                        }
-                        std::cerr << std::endl;
+                        //for (auto def : defined.at(succLoc)) {
+                        //    std::cerr << debug::getValName(def) << std::endl;
+                        //}
+                        //std::cerr << std::endl;
                     }
                 }
             }
@@ -828,11 +967,11 @@ class GraphAnalyzer {
                         changed |= definedHere.emplace(defined).second;
                 }
 
-                std::cerr << "[entry after passing]" << std::endl;
-                for (auto defined : definedHere) {
-                    std::cerr << debug::getValName(defined) << std::endl;
-                }
-                std::cerr << std::endl;
+                //std::cerr << "[entry after passing]" << std::endl;
+                //for (auto defined : definedHere) {
+                //    std::cerr << debug::getValName(defined) << std::endl;
+                //}
+                //std::cerr << std::endl;
             }
         } while (changed);
     }
@@ -843,6 +982,7 @@ public:
                   std::map<const llvm::Instruction *, VRLocation *>& locs,
                   std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs)
                   : module(m), locationMapping(locs), blockMapping(blcs) {
+        categorizeEdges();
         findLoops();
         initializeDefined();
     }
