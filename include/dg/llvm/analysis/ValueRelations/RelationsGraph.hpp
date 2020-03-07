@@ -584,9 +584,10 @@ public:
 			mapToBucket.erase(val);
 			eraseUniquePtr(buckets, valBucketPtr);
 		}
-		if (! hasRelations(fromBucketPtr))
+		if (! hasRelations(fromBucketPtr)) {
 			mapToBucket.erase(from);
 			eraseUniquePtr(buckets, fromBucketPtr);
+		}
 	}
 
 	void unsetAllLoads() {
