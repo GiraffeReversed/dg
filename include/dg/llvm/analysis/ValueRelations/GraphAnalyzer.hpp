@@ -523,7 +523,6 @@ class GraphAnalyzer {
             for (const auto& fromsValues : loadBucketPairs) {
                 for (const llvm::Value* from : fromsValues.first) {
                     if (loadsSomethingInAll(preds, from)) {
-                        std::cerr << "[from]" << debug::getValName(from) << std::endl;
 
                         VRLocation* outloopPred = preds[0]->inLoop ? preds[1] : preds[0];
                         VRLocation* inloopPred  = preds[0]->inLoop ? preds[0] : preds[1];
@@ -534,19 +533,11 @@ class GraphAnalyzer {
                         std::vector<const llvm::Value*> allRelated
                             = inloopPred->relations.getAllRelated(valInloop);
 
-                        std::cerr << "[valInloop]" << debug::getValName(valInloop) << std::endl;
-                        std::cerr << "[allRelated]" << std::endl;
-                        for (auto related : allRelated) {
-                            std::cerr << "    " << debug::getValName(related) << std::endl;
-                        }
-                        std::cerr << std::endl;
-
                         // get vector of values, that are both related to value loaded from
                         // from at the end of the loop and at the same time are loads
                         // from from in given loop
                         const llvm::Value* firstLoadInLoop = nullptr;
                         for (const llvm::Value* val : inloopValues.at(location)) {
-                            std::cerr << "[inloopVal]" << debug::getValName(val) << std::endl;
                             if (std::find(allRelated.begin(), allRelated.end(), val)
                                     != allRelated.end()) {
                                 if (auto store = llvm::dyn_cast<llvm::StoreInst>(val)) {
@@ -566,8 +557,7 @@ class GraphAnalyzer {
                         std::vector<const llvm::Value*> valsOutloop
                             = outloopPred->relations.getValsByPtr(from);
                         for (const llvm::Value* val : valsOutloop) {
-                            std::cerr << "[valOutloop]" << debug::getValName(val) << std::endl;
-                            location->relations.setEqual(valsOutloop[0], val);
+                            newGraph.setEqual(valsOutloop[0], val);
                         }
                         std::cerr << std::endl;
 
@@ -607,16 +597,24 @@ class GraphAnalyzer {
 
         for (VRLocation* pred : preds) {
             RelationsGraph& graph = pred->relations;
-            
-            for (const auto& fromsValues : graph.getAllLoads()) {
-                if (! anyInvalidated(allInvalid, fromsValues.first)) {
-                    for (auto from : fromsValues.first) {
-                        for (auto val : fromsValues.second)
-                            if (! hasConflictLoad(preds, from, val)
-                                    //&& isDefined(location, from)
-                                    //&& isDefined(location, val)
-                                )
-                                newGraph.setLoad(from, val);
+
+            for (VREdge* succEdge : pred->getSuccessors()) {
+                if (succEdge->target
+                        && succEdge->target == location
+                        && succEdge->type == EdgeType::TREE) {
+
+                    for (const auto& fromsValues : graph.getAllLoads()) {
+                        if (! anyInvalidated(allInvalid, fromsValues.first)) {
+                            for (auto from : fromsValues.first) {
+                                for (auto val : fromsValues.second) {
+                                    if (! hasConflictLoad(preds, from, val)
+                                            //&& isDefined(location, from)
+                                            //&& isDefined(location, val)
+                                        )
+                                        newGraph.setLoad(from, val);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -710,8 +708,6 @@ class GraphAnalyzer {
             VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
             assert(vrblockOfEntry);
 
-            RelationsGraph newGraph = vrblockOfEntry->first()->relations;
-
             // for each location, where the function is called
             std::vector<VRLocation*> callLocs;
             for (const llvm::Value* user : function.users()) {
@@ -727,9 +723,56 @@ class GraphAnalyzer {
             }
             changed |= mergeRelations(callLocs, vrblockOfEntry->first());
             changed |= mergeLoads(callLocs, vrblockOfEntry->first());
+
+            // TODO could also merge location specific relation to xorGraph
         }
         return changed;
     }
+
+    /*bool passCallSiteRelations() {
+        bool changed = false;
+
+        for (const llvm::Function& function : module) {
+            if (function.isDeclaration())
+                continue;
+            
+            VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
+            assert(vrblockOfEntry);
+
+            VRLocation* vrlocOfEntry = vrblockOfEntry->first();
+
+            RelationsGraph newGraph = vrlocOfEntry->relations;
+
+            // for each location, where the function is called
+            unsigned userIndex = 0;
+            for (const llvm::Value* user : function.users()) {
+
+                // get call from user
+                const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
+                if (! call) continue;
+
+                // remember call for merging of loads and relations
+                VRLocation* vrlocOfCall = locationMapping.at(call);
+                assert(vrlocOfCall);
+                
+                RelationsGraph& xorGraph = newGraph.getXorRelations()[userIndex];
+                xorGraph = vrlocOfCall->relations;
+
+                unsigned argCount = 0;
+                for (const llvm::Argument& receivedArg : function.args()) {
+                    if (argCount > call->getNumArgOperands()) break;
+                    const llvm::Value* sentArg = call->getArgOperand(argCount);
+
+                    xorGraph.setEqual(sentArg, &receivedArg);
+
+                    ++argCount;
+                }
+
+                ++userIndex;
+            }
+        }
+        return changed;
+    }*/
 
     bool analysisPass() {
         bool changed = false;
