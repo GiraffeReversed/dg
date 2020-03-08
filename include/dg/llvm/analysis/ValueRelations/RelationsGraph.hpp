@@ -819,8 +819,13 @@ public:
 		return xorRelations.back();
 	}
 
-	std::vector<RelationsGraph>& getXorRelations() {
+	const std::vector<RelationsGraph>& getXorRelations() const {
 		return xorRelations;
+	}
+
+	std::vector<RelationsGraph>& getXorRelations() {
+		const RelationsGraph* constThis = this;
+		return const_cast<std::vector<RelationsGraph>&>(constThis->getXorRelations());
 	}
 
 	void addXorRelation(const RelationsGraph& otherGraph) {

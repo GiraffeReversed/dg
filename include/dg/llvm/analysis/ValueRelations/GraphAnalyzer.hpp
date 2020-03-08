@@ -59,10 +59,9 @@ class GraphAnalyzer {
         assert(source && target && op);
 
         RelationsGraph newGraph = source->relations;
-        
+
         if (op->isInstruction()) {
             const llvm::Instruction* inst = static_cast<VRInstruction *>(op)->getInstruction();
-    		std::cerr << debug::getValName(inst) << ":" << std::endl;
             forgetInvalidated(newGraph, inst);
             processInstruction(newGraph, inst);
         } else if (op->isAssume()) { 
@@ -325,6 +324,16 @@ class GraphAnalyzer {
             else           graph.setLesserEqual(op, value);
     }
 
+    void remGen(RelationsGraph& graph, const llvm::BinaryOperator* rem) {
+        assert(rem);
+        const llvm::Constant* zero = llvm::ConstantInt::getSigned(rem->getType(), 0);
+
+        if (! graph.isLesserEqual(zero, rem->getOperand(0))) return;
+
+        graph.setLesserEqual(zero, rem);
+        graph.setLesser(rem, rem->getOperand(1));
+    }
+
     void castGen(RelationsGraph& graph, const llvm::CastInst* cast) {
         if (cast->isLosslessCast() || cast->isNoopCast(module.getDataLayout()))
             graph.setEqual(cast, cast->getOperand(0));
@@ -347,6 +356,9 @@ class GraphAnalyzer {
                 return subGen(graph, llvm::dyn_cast<llvm::BinaryOperator>(inst));
             case llvm::Instruction::Mul:
                 return mulGen(graph, llvm::dyn_cast<llvm::BinaryOperator>(inst));
+            case llvm::Instruction::SRem:
+            case llvm::Instruction::URem:
+                return remGen(graph, llvm::dyn_cast<llvm::BinaryOperator>(inst));
             default:
                 if (auto cast = llvm::dyn_cast<llvm::CastInst>(inst)) {
                     return castGen(graph, cast);
@@ -434,6 +446,7 @@ class GraphAnalyzer {
         RelationsGraph& oldGraph = preds[0]->relations;
         std::vector<const llvm::Value*> values = oldGraph.getAllValues();
 
+        // merge from all predecessors
         for (const llvm::Value* fst : values) {
             for (const llvm::Value* snd : values) {
                 if (fst == snd) continue;
@@ -451,35 +464,29 @@ class GraphAnalyzer {
             }
         }
 
+        // merge relations from tree predecessor only
+        VRLocation* treePred = getTreePred(location);
+        const RelationsGraph& treePredGraph = treePred->relations;
+
         if (isLoopJoin(location) && ! isBranchJoin(location)) {
-            VRLocation* outloopPred = nullptr;
 
-            for (VREdge* predEdge : location->predecessors) {
-                if (predEdge->type == EdgeType::TREE) outloopPred = predEdge->source;
-            }
-            assert(outloopPred);
-
-            const RelationsGraph& oldGraph = outloopPred->relations;
-            std::vector<const llvm::Value*> values = oldGraph.getAllValues();
+            std::vector<const llvm::Value*> values = treePredGraph.getAllValues();
 
             for (const llvm::Value* fst : values) {
                 for (const llvm::Value* snd : values) {
                     if (fst == snd) continue;
 
-                    if (oldGraph.isEqual(fst, snd)) newGraph.setEqual(fst, snd);
-                    if (oldGraph.isLesser(fst, snd)) newGraph.setLesser(fst, snd);
-                    if (oldGraph.isLesser(snd, fst)) newGraph.setLesser(snd, fst);
-                    if (oldGraph.isLesserEqual(fst, snd)) newGraph.setLesserEqual(fst, snd);
-                    if (oldGraph.isLesserEqual(snd, fst)) newGraph.setLesserEqual(snd, fst);
+                    if (treePredGraph.isEqual(fst, snd)) newGraph.setEqual(fst, snd);
+                    if (treePredGraph.isLesser(fst, snd)) newGraph.setLesser(fst, snd);
+                    if (treePredGraph.isLesser(snd, fst)) newGraph.setLesser(snd, fst);
+                    if (treePredGraph.isLesserEqual(fst, snd)) newGraph.setLesserEqual(fst, snd);
+                    if (treePredGraph.isLesserEqual(snd, fst)) newGraph.setLesserEqual(snd, fst);
                 }
             }
         }
 
         // simply pass xor relations over tree edge
-        for (VREdge* predEdge : location->predecessors) {
-            if (predEdge->type == EdgeType::TREE)
-                newGraph.getXorRelations() = predEdge->source->relations.getXorRelations();
-        }
+        newGraph.getXorRelations() = treePredGraph.getXorRelations();
 
         return andSwapIfChanged(location->relations, newGraph);
     }
@@ -511,6 +518,7 @@ class GraphAnalyzer {
         RelationsGraph newGraph = location->relations;
         const auto& loadBucketPairs = preds[0]->relations.getAllLoads();
 
+        // merge loads from all predecessors
         for (const auto& fromsValues : loadBucketPairs) {
             for (const llvm::Value* from : fromsValues.first) {
                 for (const llvm::Value* val : fromsValues.second) {
@@ -520,13 +528,18 @@ class GraphAnalyzer {
             }
         }
 
-        if (preds.size() == 2 && preds[0]->inLoop != preds[1]->inLoop) {
+        // infer some invariants in loop
+        if (preds.size() == 2 && isLoopJoin(location) && ! isBranchJoin(location)) {
             for (const auto& fromsValues : loadBucketPairs) {
                 for (const llvm::Value* from : fromsValues.first) {
                     if (loadsSomethingInAll(preds, from)) {
 
-                        VRLocation* outloopPred = preds[0]->inLoop ? preds[1] : preds[0];
-                        VRLocation* inloopPred  = preds[0]->inLoop ? preds[0] : preds[1];
+                        const auto& predEdges = location->predecessors;
+
+                        VRLocation* outloopPred = predEdges[0]->type == EdgeType::BACK ?
+                                                    predEdges[1]->source : predEdges[0]->source;
+                        VRLocation* inloopPred = predEdges[0]->type == EdgeType::BACK ?
+                                                    predEdges[0]->source : predEdges[1]->source;
 
                         const llvm::Value* valInloop
                             = inloopPred->relations.getValsByPtr(from)[0];
@@ -571,18 +584,16 @@ class GraphAnalyzer {
                                 newGraph.setLoad(from, firstLoadInLoop);
                             }
                         }
-
-
                     }
                 }
             }
         }
 
-        std::set<const llvm::Value*> allInvalid;
+        // merge loads from outloop predecessor, that are not invalidated
+        // inside the loop
+        if (isLoopJoin(location) && ! isBranchJoin(location)) {
 
-        // if we are merging loop, not branches or function calls
-        // there may be invalidated loads
-        if (inloopValues.find(location) != inloopValues.end()) {
+            std::set<const llvm::Value*> allInvalid;
 
             for (VRLocation* pred : preds) {
                 RelationsGraph& graph = pred->relations;
@@ -592,27 +603,15 @@ class GraphAnalyzer {
                     allInvalid.insert(invalid.begin(), invalid.end());
                 }
             }
-        }
 
-        for (VRLocation* pred : preds) {
-            RelationsGraph& graph = pred->relations;
+            VRLocation* treePred = getTreePred(location);
+            const RelationsGraph& oldGraph = treePred->relations;
 
-            for (VREdge* succEdge : pred->getSuccessors()) {
-                if (succEdge->target
-                        && succEdge->target == location
-                        && succEdge->type == EdgeType::TREE) {
-
-                    for (const auto& fromsValues : graph.getAllLoads()) {
-                        if (! anyInvalidated(allInvalid, fromsValues.first)) {
-                            for (auto from : fromsValues.first) {
-                                for (auto val : fromsValues.second) {
-                                    if (! hasConflictLoad(preds, from, val)
-                                            //&& isDefined(location, from)
-                                            //&& isDefined(location, val)
-                                        )
-                                        newGraph.setLoad(from, val);
-                                }
-                            }
+            for (const auto& fromsValues : oldGraph.getAllLoads()) {
+                if (! anyInvalidated(allInvalid, fromsValues.first)) {
+                    for (auto from : fromsValues.first) {
+                        for (auto val : fromsValues.second) {
+                            newGraph.setLoad(from, val);
                         }
                     }
                 }
@@ -620,6 +619,15 @@ class GraphAnalyzer {
         }
 
         return andSwapIfChanged(location->relations, newGraph);
+    }
+
+    VRLocation* getTreePred(VRLocation* location) const {
+        VRLocation* treePred = nullptr;
+        for (VREdge* predEdge : location->predecessors) {
+            if (predEdge->type == EdgeType::TREE) treePred = predEdge->source;
+        }
+        assert(treePred);
+        return treePred;
     }
 
     bool isDefined(VRLocation* loc, const llvm::Value* val) const {
@@ -731,6 +739,10 @@ class GraphAnalyzer {
             auto& vrblockPtr = pair.second;
 
             for (auto& locationPtr : vrblockPtr->locations) {
+                std::cerr << "LOCATION " << locationPtr->id << std::endl;
+                for (VREdge* predEdge : locationPtr->predecessors) 
+                    std::cerr << predEdge->op->toStr() << std::endl;
+
                 if (locationPtr->predecessors.size() > 1) {
                     changed = mergeRelations(locationPtr.get())
                             | mergeLoads(locationPtr.get());
@@ -963,7 +975,7 @@ public:
                   : module(m), locationMapping(locs), blockMapping(blcs) {
         categorizeEdges();
         findLoops();
-        initializeDefined();
+        //initializeDefined();
     }
 
     void analyze(unsigned maxPass) {
