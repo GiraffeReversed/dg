@@ -29,7 +29,11 @@ public:
     virtual ~VROp() = default;
 
 #ifndef NDEBUG
-    virtual void dump() const = 0;
+    virtual std::string toStr() const = 0;
+    
+    void dump() {
+        std::cout << toStr();
+    }
 #endif
 };
 
@@ -37,8 +41,8 @@ struct VRNoop : public VROp {
     VRNoop() : VROp(VROpType::NOOP) {}
 
 #ifndef NDEBUG
-    void dump() const override {
-        std::cout << "(noop)";
+    std::string toStr() const override {
+        return "(noop)";
     }
 #endif
 };
@@ -52,8 +56,8 @@ struct VRInstruction : public VROp {
     const llvm::Instruction* getInstruction() const { return instruction; }
 
 #ifndef NDEBUG
-    void dump() const override {
-        std::cout << debug::getValName(instruction);
+    std::string toStr() const override {
+        return debug::getValName(instruction);
     }
 #endif
 };
@@ -68,8 +72,8 @@ struct VRAssume : public VROp {
 protected:
     VRAssume(VROpType type, const llvm::Value* v) : VROp(type), val(v) {}
 
-    void dump() const override {
-        std::cout << "assuming " << debug::getValName(val) << " is ";
+    std::string toStr() const override {
+        return "assuming " + debug::getValName(val) + " is ";
     }
 };
 
@@ -84,9 +88,8 @@ struct VRAssumeBool : public VRAssume {
     }
 
 #ifndef NDEBUG
-    void dump() const override {
-        VRAssume::dump();
-        std::cout << (assumption ? "true" : "false");
+    std::string toStr() const override {
+        return VRAssume::toStr() + (assumption ? "true" : "false");
     }
 #endif
 };
@@ -102,9 +105,8 @@ struct VRAssumeEqual : public VRAssume {
     }
 
 #ifndef NDEBUG
-    void dump() const override {
-        VRAssume::dump();
-        std::cout << debug::getValName(assumption);
+    std::string toStr() const override {
+        return VRAssume::toStr() + debug::getValName(assumption);
     }
 #endif
 };
