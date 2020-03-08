@@ -926,7 +926,7 @@ public:
 		}
 
 		for (auto& rg : xorRelations) {
-			stream << std::endl << "XOR relations" << std::endl;
+			stream << std::endl << "    XOR relations" << std::endl;
 			rg.generalDump(stream);
 		}
 
