@@ -62,14 +62,14 @@ void substitueInSet(const std::map<T, T>& mapping, std::set<T>& set) {
 }
 
 template <typename T>
-T findByKey(std::map<T, T>& map, T key) {
+T findByKey(const std::map<T, T>& map, T key) {
 	auto found = map.find(key);
 	if (found == map.end()) return nullptr;
 	return found->second;
 }
 
 template <typename T>
-T findByValue(std::map<T, T>& map, T value) {
+T findByValue(const std::map<T, T>& map, T value) {
 	for (auto& pair : map) {
 		if (pair.second == value) return pair.first;
 	}
@@ -264,6 +264,12 @@ class RelationsGraph {
 				|| ! bucket->lesserEqual.empty()
 				|| ! bucket->parents.empty();
 	}
+
+	bool hasRelationsOrLoads(EqualityBucket* bucket) const {
+		return hasRelations(bucket)
+			|| findByKey(loads, bucket)
+			|| findByValue(loads, bucket);
+	}
 	
 public:
 
@@ -410,8 +416,15 @@ public:
 			Frame frame;
 			while (! frames.empty()) {
 				frame = frames.top();
-				toMerge.push_back(std::get<0>(frame));
+				BucketPtr bucket = std::get<0>(frame);
+				toMerge.push_back(bucket);
 				frames.pop();
+
+				// also unset lesserEqual relation
+				if (! frames.empty()) {
+					BucketPtr above = std::get<0>(frames.top());
+					above->lesserEqual.erase(bucket); bucket->parents.erase(above);
+				}
 			}
 
 		} else {
@@ -584,12 +597,12 @@ public:
 
 		loads.erase(fromBucketPtr);
 
-		if (! hasRelations(valBucketPtr)) {
+		if (! hasRelationsOrLoads(valBucketPtr)) {
 			T val = getAny(valBucketPtr);
 			mapToBucket.erase(val);
 			eraseUniquePtr(buckets, valBucketPtr);
 		}
-		if (! hasRelations(fromBucketPtr)) {
+		if (! hasRelationsOrLoads(fromBucketPtr)) {
 			mapToBucket.erase(from);
 			eraseUniquePtr(buckets, fromBucketPtr);
 		}
