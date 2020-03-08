@@ -823,16 +823,8 @@ public:
 		return xorRelations;
 	}
 
-	bool hasXorRelation(const RelationsGraph& otherGraph) {
-		for (const RelationsGraph& thisGraph : xorRelations) {
-			if (thisGraph == otherGraph) return true;
-		}
-		return false;
-	}
-
 	void addXorRelation(const RelationsGraph& otherGraph) {
-		if (! hasXorRelation(otherGraph))
-			xorRelations.emplace_back(otherGraph);
+		xorRelations.emplace_back(otherGraph);
 	}
 
 #ifndef NDEBUG

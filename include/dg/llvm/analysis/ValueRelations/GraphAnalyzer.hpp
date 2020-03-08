@@ -475,9 +475,10 @@ class GraphAnalyzer {
             }
         }
 
-        for (VRLocation* pred : preds) {
-            for (const RelationsGraph& xorGraph : pred->relations.getXorRelations())
-                newGraph.addXorRelation(xorGraph);
+        // simply pass xor relations over tree edge
+        for (VREdge* predEdge : location->predecessors) {
+            if (predEdge->type == EdgeType::TREE)
+                newGraph.getXorRelations() = predEdge->source->relations.getXorRelations();
         }
 
         return andSwapIfChanged(location->relations, newGraph);
@@ -551,7 +552,6 @@ class GraphAnalyzer {
                                 }
                             }
                         }
-                        std::cerr << std::endl;
 
                         // get all equal vals from load from outloopPred
                         std::vector<const llvm::Value*> valsOutloop
@@ -559,7 +559,6 @@ class GraphAnalyzer {
                         for (const llvm::Value* val : valsOutloop) {
                             newGraph.setEqual(valsOutloop[0], val);
                         }
-                        std::cerr << std::endl;
 
                         // set all preserved relations
                         if (firstLoadInLoop) {
@@ -659,15 +658,13 @@ class GraphAnalyzer {
         return true;
     }
 
-    void pairFormalAndRealArguments() {
+    void prepareXorGraphs() {
         for (const llvm::Function& function : module) {
             if (function.isDeclaration())
                 continue;
             
             VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
             assert(vrblockOfEntry);
-
-            RelationsGraph newGraph = vrblockOfEntry->first()->relations;
 
             // for each location, where the function is called
             for (const llvm::Value* user : function.users()) {
@@ -676,62 +673,13 @@ class GraphAnalyzer {
                 const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
                 if (! call) continue;
 
-                // create xorGraph if neccessary
-                RelationsGraph* xorGraph;
-                if (function.getNumUses() > 1)
-                    xorGraph = &newGraph.newXorRelation();
-                else
-                    xorGraph = &newGraph;
-
-                // set real parameters equal to formal
-                unsigned argCount = 0;
-                for (const llvm::Argument& receivedArg : function.args()) {
-                    if (argCount > call->getNumArgOperands()) break;
-                    const llvm::Value* sentArg = call->getArgOperand(argCount);
-
-                    xorGraph->setEqual(sentArg, &receivedArg);
-
-                    ++argCount;
-                }
+                vrblockOfEntry->first()->relations.newXorRelation();
             }
-            andSwapIfChanged(vrblockOfEntry->first()->relations, newGraph);
         }
     }
 
     bool passCallSiteRelations() {
         bool changed = false;
-
-        for (const llvm::Function& function : module) {
-            if (function.isDeclaration())
-                continue;
-            
-            VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
-            assert(vrblockOfEntry);
-
-            // for each location, where the function is called
-            std::vector<VRLocation*> callLocs;
-            for (const llvm::Value* user : function.users()) {
-
-                // get call from user
-                const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
-                if (! call) continue;
-
-                // remember call for merging of loads and relations
-                VRLocation* vrlocOfCall = locationMapping.at(call);
-                assert(vrlocOfCall);
-                callLocs.push_back(vrlocOfCall);
-            }
-            changed |= mergeRelations(callLocs, vrblockOfEntry->first());
-            changed |= mergeLoads(callLocs, vrblockOfEntry->first());
-
-            // TODO could also merge location specific relation to xorGraph
-        }
-        return changed;
-    }
-
-    /*bool passCallSiteRelations() {
-        bool changed = false;
-
         for (const llvm::Function& function : module) {
             if (function.isDeclaration())
                 continue;
@@ -755,7 +703,7 @@ class GraphAnalyzer {
                 VRLocation* vrlocOfCall = locationMapping.at(call);
                 assert(vrlocOfCall);
                 
-                RelationsGraph& xorGraph = newGraph.getXorRelations()[userIndex];
+                RelationsGraph& xorGraph = newGraph.getXorRelations().at(userIndex);
                 xorGraph = vrlocOfCall->relations;
 
                 unsigned argCount = 0;
@@ -770,9 +718,10 @@ class GraphAnalyzer {
 
                 ++userIndex;
             }
+            changed |= andSwapIfChanged(vrlocOfEntry->relations, newGraph);
         }
         return changed;
-    }*/
+    }
 
     bool analysisPass() {
         bool changed = false;
@@ -964,93 +913,46 @@ class GraphAnalyzer {
     }
 
     void initializeDefined() {
-        bool changed;
-        do {
-            changed = false;
-            for (const llvm::Function& function : module) {
-                if (function.isDeclaration()) continue;
 
-                auto& block = function.getEntryBlock();
-                VRBBlock* vrblock = blockMapping.at(&block).get();
+        for (const llvm::Function& function : module) {
+            if (function.isDeclaration()) continue;
 
-                std::set<VRLocation*> found = { vrblock->first() };
-                std::list<VRLocation*> toVisit = { vrblock->first() };
+            auto& block = function.getEntryBlock();
+            VRBBlock* vrblock = blockMapping.at(&block).get();
 
-                std::set<const llvm::Value*> temp;
-                for (auto& arg : function.args())
-                    temp.emplace(&arg);
-                defined.emplace(vrblock->first(), temp);
+            std::list<VRLocation*> toVisit = { vrblock->first() };
 
-                while (! toVisit.empty()) {
-                    VRLocation* current = toVisit.front();
-                    toVisit.pop_front();
+            // prepare sets of defined values for each location
+            for (auto& instLocationPair : locationMapping)
+                defined.emplace(instLocationPair.second, std::set<const llvm::Value*>());
 
-                    //std::set<VRLocation*> backwardReach;
-                    //for (VREdge* edge : genericReach(current, false)) {
-                    //    backwardReach.insert(edge->source);
-                    //    if (edge->target) backwardReach.insert(edge->target);
-                    //}
+            while (! toVisit.empty()) {
+                VRLocation* current = toVisit.front();
+                toVisit.pop_front();
 
+                for (VREdge* succEdge : current->getSuccessors()) {
 
-                    for (VREdge* succEdge : current->getSuccessors()) {
+                    // if edge leads to nowhere, just continue
+                    VRLocation* succLoc = succEdge->target;
+                    if (! succLoc) continue;
 
-                        VRLocation* succLoc = succEdge->target;
-                        if (! succLoc) continue;
+                    // if edge leads back, we would add values we exactly dont want
+                    if (succEdge->type == EdgeType::BACK) continue;
 
-                        auto definedSucc = defined.find(succLoc);
-                        if (definedSucc == defined.end() || ! current->inLoop)
-                            std::tie(definedSucc, changed) = defined.emplace(succLoc,
-                                                        std::set<const llvm::Value*>());
-                        
+                    auto& definedSucc = defined.at(succLoc);
+                    auto& definedHere = defined.at(current);
 
-                        if(! definedSucc->second.empty())
-                                //&& backwardReach.find(succLoc) != backwardReach.end())
-                            continue;
+                    // copy from this location to its successor
+                    definedSucc.insert(definedHere.begin(), definedHere.end());
 
-                        auto& definedHere = defined.at(current);
-                        for (const llvm::Value* defined : definedHere)
-                            changed |= definedSucc->second.emplace(defined).second;
+                    // add instruction, if edge carries any
+                    if (auto op = dynamic_cast<VRInstruction*>(succEdge->op.get()))
+                        definedSucc.emplace(op->getInstruction());
 
-                        if (auto op = dynamic_cast<VRInstruction*>(succEdge->op.get()))
-                            changed |= definedSucc->second.emplace(op->getInstruction()).second;
-
-                        if (found.find(succLoc) == found.end()) {
-                            found.emplace(succLoc);
-                            toVisit.push_back(succLoc);
-                        }
-
-                        //for (auto def : defined.at(succLoc)) {
-                        //    std::cerr << debug::getValName(def) << std::endl;
-                        //}
-                        //std::cerr << std::endl;
-                    }
+                    toVisit.push_back(succLoc);
                 }
             }
-
-            // pass definitions from function calls
-            for (const llvm::Function& function : module) {
-                if (function.isDeclaration()) continue;
-                VRBBlock* entryBlock = blockMapping.at(&function.getEntryBlock()).get();
-                VRLocation* entryLoc = entryBlock->first();
-
-                auto& definedHere = defined.at(entryLoc);
-
-                for (const llvm::User* call : function.users()) {
-                    VRLocation* callLocation = locationMapping.at(
-                        static_cast<const llvm::Instruction*>(call));
-                    auto definedAtCall = defined.at(callLocation);
-
-                    for (const llvm::Value* defined : definedAtCall)
-                        changed |= definedHere.emplace(defined).second;
-                }
-
-                //std::cerr << "[entry after passing]" << std::endl;
-                //for (auto defined : definedHere) {
-                //    std::cerr << debug::getValName(defined) << std::endl;
-                //}
-                //std::cerr << std::endl;
-            }
-        } while (changed);
+        }
     }
 
 
@@ -1066,7 +968,7 @@ public:
 
     void analyze(unsigned maxPass) {
 
-        pairFormalAndRealArguments();
+        prepareXorGraphs();
 
         bool changed = true;
         unsigned passNum = 0;
