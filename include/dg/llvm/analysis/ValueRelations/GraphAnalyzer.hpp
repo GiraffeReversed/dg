@@ -117,7 +117,7 @@ class GraphAnalyzer {
         writtenTo.insert(memoryPtr); // unset underlying memory
         writtenTo.insert(store->getPointerOperand()); // unset pointer itself
 
-        if (! eqivToAlloca(graph.getEqual(memoryPtr))) {
+        if (! equivToAlloca(graph.getEqual(memoryPtr))) {
             // we can't tell, where the instruction writes to
             //     except that it can't be memory, that surely has no alias
 
@@ -136,7 +136,7 @@ class GraphAnalyzer {
         //   (since they may be aliases of written location)
         for (const auto& fromsValues : graph.getAllLoads()) {
 
-            if (! eqivToAlloca(fromsValues.first))
+            if (! equivToAlloca(fromsValues.first))
                 for (const llvm::Value* from : fromsValues.first) {
                     if (mayHaveAlias(llvm::cast<llvm::User>(from))) {
                         writtenTo.insert(from);
@@ -148,7 +148,7 @@ class GraphAnalyzer {
         return writtenTo;
     }
 
-    const llvm::Value* stripCastsAndGEPs(const llvm::Value* memoryPtr) const {
+    static const llvm::Value* stripCastsAndGEPs(const llvm::Value* memoryPtr) {
         memoryPtr = memoryPtr->stripPointerCasts();
         while (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(memoryPtr)) {
             memoryPtr = gep->getPointerOperand()->stripPointerCasts();
@@ -156,7 +156,7 @@ class GraphAnalyzer {
         return memoryPtr;
     }
 
-    bool eqivToAlloca(const std::vector<const llvm::Value*>& froms) const {
+    static bool equivToAlloca(const std::vector<const llvm::Value*>& froms) {
         for (auto memoryPtr : froms) {
             memoryPtr = stripCastsAndGEPs(memoryPtr);
             if (llvm::isa<llvm::AllocaInst>(memoryPtr)) return true;
@@ -304,8 +304,28 @@ class GraphAnalyzer {
             return true;
         }
 
+        llvm::Type* i32 = llvm::Type::getInt32Ty(op->getContext());
+        const llvm::Constant* one = llvm::ConstantInt::getSigned(i32, 1);
+        const llvm::Constant* minusOne = llvm::ConstantInt::getSigned(i32, -1);
+
+        const llvm::Value* fst = op->getOperand(0);
+        const llvm::Value* snd = op->getOperand(1);
+
         if (! c1 && ! c2) {
-            // TODO collect something here?
+            switch (op->getOpcode()) {
+                case llvm::Instruction::Add:
+                    if (graph.isLesserEqual(one, fst)) graph.setLesser(snd, op);
+                    if (graph.isLesserEqual(one, snd)) graph.setLesser(fst, op);
+                    if (graph.isLesserEqual(fst, minusOne)) graph.setLesser(op, snd);
+                    if (graph.isLesserEqual(snd, minusOne)) graph.setLesser(op, fst);
+                    break;
+                case llvm::Instruction::Sub:
+                    if (graph.isLesserEqual(one, snd)) graph.setLesser(op, fst);
+                    if (graph.isLesserEqual(snd, minusOne)) graph.setLesser(fst, op);
+                    break;
+                default:
+                    break;
+            }
             return true;
         }
         return false;
