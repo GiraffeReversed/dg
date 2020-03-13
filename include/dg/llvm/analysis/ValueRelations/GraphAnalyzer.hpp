@@ -387,8 +387,14 @@ class GraphAnalyzer {
     } 
 
     void processAssumeBool(RelationsGraph& newGraph, VRAssumeBool* assume) const {
-        const llvm::ICmpInst* icmp = llvm::dyn_cast<llvm::ICmpInst>(assume->getValue());
-        assert(icmp);
+        if (llvm::isa<llvm::ICmpInst>(assume->getValue()))
+            processICMP(newGraph, assume);
+        if (llvm::isa<llvm::PHINode>(assume->getValue()))
+            processPhi(newGraph, assume);
+    }
+
+    void processICMP(RelationsGraph& newGraph, VRAssumeBool* assume) const {
+        const llvm::ICmpInst* icmp = llvm::cast<llvm::ICmpInst>(assume->getValue());
         bool assumption = assume->getAssumption();
 
         const llvm::Value* op1 = icmp->getOperand(0);
@@ -426,6 +432,28 @@ class GraphAnalyzer {
         #endif
                 abort();
         }
+    }
+
+    void processPhi(RelationsGraph& newGraph, VRAssumeBool* assume) const {
+        const llvm::PHINode* phi = llvm::cast<llvm::PHINode>(assume->getValue());
+        bool assumption = assume->getAssumption();
+
+        const llvm::BasicBlock* assumedPred = nullptr;
+        for (unsigned i = 0; i < phi->getNumIncomingValues(); ++i) {
+            const llvm::Value* result = phi->getIncomingValue(i);
+            auto constResult = llvm::dyn_cast<llvm::ConstantInt>(result);
+            if (! constResult || (constResult
+                    && ((constResult->isOne() && assumption)
+                    || (constResult->isZero() && ! assumption)))) {
+                if (! assumedPred) assumedPred = phi->getIncomingBlock(i);
+                else return; // we found other viable incoming block
+            }
+        }
+        assert (assumedPred);
+
+        VRBBlock* vrbblock = blockMapping.at(assumedPred).get();
+        VRLocation* source = vrbblock->last();
+        newGraph.merge(source->relations);
     }
 
     void processAssumeEqual(RelationsGraph& newGraph, VRAssumeEqual* assume) const {
@@ -488,7 +516,7 @@ class GraphAnalyzer {
         VRLocation* treePred = getTreePred(location);
         const RelationsGraph& treePredGraph = treePred->relations;
 
-        if (isLoopJoin(location) && ! isBranchJoin(location)) {
+        if (location->isJustLoopJoin()) {
 
             std::vector<const llvm::Value*> values = treePredGraph.getAllValues();
 
@@ -549,7 +577,7 @@ class GraphAnalyzer {
         }
 
         // infer some invariants in loop
-        if (preds.size() == 2 && isLoopJoin(location) && ! isBranchJoin(location)) {
+        if (preds.size() == 2 && location->isJustLoopJoin()) {
             for (const auto& fromsValues : loadBucketPairs) {
                 for (const llvm::Value* from : fromsValues.first) {
                     if (loadsSomethingInAll(preds, from)) {
@@ -611,7 +639,7 @@ class GraphAnalyzer {
 
         // merge loads from outloop predecessor, that are not invalidated
         // inside the loop
-        if (isLoopJoin(location) && ! isBranchJoin(location)) {
+        if (location->isJustLoopJoin()) {
 
             std::set<const llvm::Value*> allInvalid;
 
@@ -871,9 +899,7 @@ class GraphAnalyzer {
         for (auto& pair : locationMapping) {
             auto& locationPtr = pair.second;
             std::vector<VREdge*>& predEdges = locationPtr->predecessors;
-            if (predEdges.size() > 1) {
-
-                if (isBranchJoin(locationPtr) && ! isLoopJoin(locationPtr)) continue;
+            if (locationPtr->isJustLoopJoin()) {
 
                 std::vector<VREdge*> treeEdges;
                 for (auto it = predEdges.begin(); it != predEdges.end(); ++it) {
@@ -928,20 +954,6 @@ class GraphAnalyzer {
             }
         }
         return result;
-    }
-
-    bool isBranchJoin(const VRLocation* location) const {
-        for (VREdge* pred : location->predecessors) {
-            if (pred->type == EdgeType::FORWARD) return true;
-        }
-        return false;
-    }
-
-    bool isLoopJoin(const VRLocation* location) const {
-        for (VREdge* pred : location->predecessors) {
-            if (pred->type == EdgeType::BACK) return true;
-        }
-        return false;
     }
 
     void initializeDefined() {

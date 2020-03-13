@@ -179,6 +179,28 @@ struct VRLocation  {
         return result;
     }
 
+    bool isJoin() const {
+        return predecessors.size() > 1;
+    }
+
+    bool isJustBranchJoin() const {
+        // allows TREE and FORWARD
+        if (! isJoin()) return false;
+        for (VREdge* pred : predecessors) {
+            if (pred->type == EdgeType::BACK) return false;
+        }
+        return true;
+    }
+
+    bool isJustLoopJoin() const {
+        // allows TREE and BACK
+        if (! isJoin()) return false;
+        for (VREdge* pred : predecessors) {
+            if (pred->type == EdgeType::FORWARD) return false;
+        }
+        return true;
+    }
+
 #ifndef NDEBUG
     void dump() const {
         std::cout << id << std::endl;
