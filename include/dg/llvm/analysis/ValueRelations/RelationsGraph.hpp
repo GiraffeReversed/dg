@@ -371,6 +371,19 @@ public:
 		return ! (lt == rt);
 	}
 
+	void merge(const RelationsGraph& other) {
+		for (auto fst : other.getAllValues()) {
+			for (auto snd : other.getAllValues()) {
+				if (other.isEqual(fst, snd)) setEqual(fst, snd);
+				if (other.isLesser(fst, snd)) setLesser(fst, snd);
+				if (other.isLesserEqual(fst, snd)
+						&& ! other.isLesser(fst, snd)
+						&& ! other.isEqual(fst, snd)) setLesserEqual(fst, snd);
+				if (other.isLoad(fst, snd)) setLoad(fst, snd);
+			}
+		}
+	}
+
 	void add(T val) {
 		if (mapToBucket.find(val) != mapToBucket.end()) return;
 
