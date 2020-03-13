@@ -205,6 +205,7 @@ class AnalysisGraph {
         return "maybe";
     }  
 
+public:
     std::string isValidPointer(const llvm::Value* ptr, const llvm::Value* size) const {
         // ptr is not a pointer
         if (!ptr->getType()->isPointerTy()) return "false";
@@ -241,7 +242,6 @@ class AnalysisGraph {
         return "true";
     }
 
-public:
     AnalysisGraph(const llvm::Module& M, unsigned maxPass) : module(M) {
         GraphBuilder gb(module, locationMapping, blockMapping);
         gb.build();
