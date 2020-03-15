@@ -79,9 +79,9 @@ class RelationsAnalyzer {
             graph.unsetAllLoadsByPtr(invalid);
     }
 
-     std::set<const llvm::Value*>
-     instructionInvalidates(const RelationsGraph& graph,
-                            const llvm::Instruction* inst) const {
+    std::set<const llvm::Value*>
+    instructionInvalidates(const RelationsGraph& graph,
+                           const llvm::Instruction* inst) const {
 
         if (! inst->mayWriteToMemory() && ! inst->mayHaveSideEffects())
             return std::set<const llvm::Value*>();
@@ -594,16 +594,18 @@ class RelationsAnalyzer {
                         std::vector<const llvm::Value*> allRelated
                             = inloopPred->relations.getAllRelated(valInloop);
 
-                        // get vector of values, that are both related to value loaded from
-                        // from at the end of the loop and at the same time are loads
+                        // get some value, that is both related to the value loaded from
+                        // from at the end of the loop and at the same time is loaded
                         // from from in given loop
                         const llvm::Value* firstLoadInLoop = nullptr;
                         for (const auto* val : structure.getInloopValues(location)) {
+
+                            const RelationsGraph& relations = locationMapping.at(val)->relations;
+                            auto invalidated = instructionInvalidates(relations, val);
+                            if (invalidated.find(from) != invalidated.end()) break;
+
                             if (std::find(allRelated.begin(), allRelated.end(), val)
                                     != allRelated.end()) {
-                                if (auto store = llvm::dyn_cast<llvm::StoreInst>(val)) {
-                                    if (store->getPointerOperand() == from) break;
-                                }
                                 if (auto load = llvm::dyn_cast<llvm::LoadInst>(val)) {
                                     if (load->getPointerOperand() == from) {
                                         firstLoadInLoop = load;
@@ -613,15 +615,16 @@ class RelationsAnalyzer {
                             }
                         }
 
-                        // get all equal vals from load from outloopPred
-                        std::vector<const llvm::Value*> valsOutloop
-                            = outloopPred->relations.getValsByPtr(from);
-                        for (const llvm::Value* val : valsOutloop) {
-                            newGraph.setEqual(valsOutloop[0], val);
-                        }
-
                         // set all preserved relations
                         if (firstLoadInLoop) {
+
+                            // get all equal vals from load from outloopPred
+                            std::vector<const llvm::Value*> valsOutloop
+                                = outloopPred->relations.getValsByPtr(from);
+                            for (const llvm::Value* val : valsOutloop) {
+                                newGraph.setEqual(valsOutloop[0], val);
+                            }
+
                             if (inloopPred->relations.isLesser(firstLoadInLoop, valInloop)) {
                                 newGraph.setLesserEqual(valsOutloop[0], firstLoadInLoop);
                                 newGraph.setLoad(from, firstLoadInLoop);
