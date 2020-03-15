@@ -223,6 +223,11 @@ struct VRBBlock {
     VRLocation *first() { return locations.front().get(); }
     const VRLocation *last() const { return locations.back().get(); }
     const VRLocation *first() const { return locations.front().get(); }
+
+    auto begin() -> decltype(locations.begin()) { return locations.begin(); }
+    auto end()   -> decltype(locations.end())   { return locations.end(); }
+    auto begin() const -> decltype(locations.begin()) { return locations.begin(); }
+    auto end() const   -> decltype(locations.end())   { return locations.end(); }
 };
 
 } // namespace vr

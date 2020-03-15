@@ -1,5 +1,5 @@
-#ifndef _DG_LLVM_VALUE_RELATION_GRAPH_ANALYZER_HPP_
-#define _DG_LLVM_VALUE_RELATION_GRAPH_ANALYZER_HPP_
+#ifndef _DG_LLVM_VALUE_RELATION_RELATIONS_ANALYZER_HPP_
+#define _DG_LLVM_VALUE_RELATION_RELATIONS_ANALYZER_HPP_
 
 // ignore unused parameters in LLVM libraries
 #if (__clang__)
@@ -27,6 +27,7 @@
 
 #include "GraphElements.hpp"
 #include "RelationsGraph.hpp"
+#include "StructureAnalyzer.hpp"
 
 #ifndef NDEBUG
 #include "getValName.h"
@@ -37,7 +38,7 @@ namespace analysis {
 namespace vr {
 
 
-class GraphAnalyzer {
+class RelationsAnalyzer {
 
     using RelationsGraph = RelationsGraph<const llvm::Value*>;
 
@@ -47,12 +48,10 @@ class GraphAnalyzer {
     const std::map<const llvm::Instruction *, VRLocation *>& locationMapping;
     const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping;
 
-    // holds vector of instructions, which are processed on any path back to given location
-    // is computed only for locations with more than one predecessor
-    std::map<VRLocation*, std::vector<const llvm::Instruction*>> inloopValues;
-
-    // holds vector of values, which are defined at given location
-    std::map<VRLocation*, std::set<const llvm::Value*>> defined;
+    // holds information about structural properties of analyzed module
+    // like set of instructions executed in loop starging at given location
+    // or possibly set of values defined at given location
+    const StructureAnalyzer& structure;
 
     bool processOperation(VRLocation* source, VRLocation* target, VROp* op) {
         if (! target) return false;
@@ -599,7 +598,7 @@ class GraphAnalyzer {
                         // from at the end of the loop and at the same time are loads
                         // from from in given loop
                         const llvm::Value* firstLoadInLoop = nullptr;
-                        for (const llvm::Value* val : inloopValues.at(location)) {
+                        for (const auto* val : structure.getInloopValues(location)) {
                             if (std::find(allRelated.begin(), allRelated.end(), val)
                                     != allRelated.end()) {
                                 if (auto store = llvm::dyn_cast<llvm::StoreInst>(val)) {
@@ -646,7 +645,7 @@ class GraphAnalyzer {
             for (VRLocation* pred : preds) {
                 RelationsGraph& graph = pred->relations;
 
-                for (const llvm::Instruction* inst : inloopValues.at(location)) {
+                for (const auto* inst : structure.getInloopValues(location)) {
                     auto invalid = instructionInvalidates(graph, inst);
                     allInvalid.insert(invalid.begin(), invalid.end());
                 }
@@ -676,11 +675,6 @@ class GraphAnalyzer {
         }
         assert(treePred);
         return treePred;
-    }
-
-    bool isDefined(VRLocation* loc, const llvm::Value* val) const {
-        auto definedHere = defined.at(loc);
-        return llvm::isa<llvm::Constant>(val) || definedHere.find(val) != definedHere.end();
     }
 
     bool hasConflictLoad(const std::vector<VRLocation*>& preds,
@@ -837,178 +831,13 @@ class GraphAnalyzer {
         return false;
     }
 
-    void categorizeEdges() {
-        for (auto& function : module) {
-            if (function.isDeclaration()) continue;
-
-            VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
-            assert(vrblockOfEntry);
-
-            VRLocation* first = vrblockOfEntry->first();
-
-            std::vector<std::pair<VRLocation*, int>> stack;
-            std::set<VRLocation*> found;
-
-            stack.emplace_back(first, 0);
-            found.emplace(first);
-
-            VRLocation* current;
-            unsigned succIndex;
-            while (! stack.empty()) {
-                std::tie(current, succIndex) = stack.back();
-                stack.pop_back();
-
-                // check if there is next successor
-                if (current->successors.size() <= succIndex)
-                    continue;
-
-                VREdge* succEdge = current->getSuccessors()[succIndex];
-                VRLocation* successor = succEdge->target;
-
-                // if there is, plan return
-                stack.emplace_back(current, ++succIndex);
-
-                if (! successor) {
-                    succEdge->type = EdgeType::TREE;
-                    continue;
-                }
-
-                // if successor was already searched, we can at least gorize the edge
-                if (found.find(successor) != found.end()) {
-                    std::vector<VRLocation*> mockStack;
-                    for (auto& locIndex : stack)
-                        mockStack.push_back(locIndex.first);
-
-                    if (std::find(mockStack.begin(), mockStack.end(), successor) != mockStack.end())
-                        succEdge->type = EdgeType::BACK;
-                    else
-                        succEdge->type = EdgeType::FORWARD;
-                    continue;
-                }
-
-                // plan visit to successor
-                stack.emplace_back(successor, 0);
-                found.emplace(successor);
-                succEdge->type = EdgeType::TREE;
-            }
-
-        }
-    }
-
-    void findLoops() {
-        for (auto& pair : locationMapping) {
-            auto& locationPtr = pair.second;
-            std::vector<VREdge*>& predEdges = locationPtr->predecessors;
-            if (locationPtr->isJustLoopJoin()) {
-
-                std::vector<VREdge*> treeEdges;
-                for (auto it = predEdges.begin(); it != predEdges.end(); ++it) {
-                    if ((*it)->type == EdgeType::TREE) {
-                        treeEdges.emplace_back(*it);
-                        predEdges.erase(it);
-                    }
-                }
-                
-                auto forwardReach = genericReach(locationPtr, true);
-                auto backwardReach = genericReach(locationPtr, false);
-
-                for (VREdge* predEdge : treeEdges)
-                    predEdges.emplace_back(predEdge);
-
-                auto inloopValuesIt = inloopValues.emplace(locationPtr,
-                                std::vector<const llvm::Instruction*>()).first;
-
-                for (auto edge : forwardReach) {
-                    if (std::find(backwardReach.begin(), backwardReach.end(), edge)
-                            != backwardReach.end()) {
-                        edge->target->inLoop = true;
-                        if (auto op = dynamic_cast<VRInstruction*>(edge->op.get())) {
-                            inloopValuesIt->second.emplace_back(op->getInstruction());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    std::vector<VREdge*> genericReach(VRLocation* from, bool goForward) {
-        std::set<VRLocation*> found = { from };
-        std::list<VRLocation*> toVisit = { from };
-
-        std::vector<VREdge*> result;
-        while (! toVisit.empty()) {
-            VRLocation* current = toVisit.front();
-            toVisit.pop_front();
-
-            auto nextEdges = goForward ? current->getSuccessors() : current->getPredecessors();
-            for (VREdge* nextEdge : nextEdges) {
-                if (! nextEdge->target) continue;
-
-                result.emplace_back(nextEdge);
-
-                auto nextLocation = goForward ? nextEdge->target : nextEdge->source;
-                if (found.find(nextLocation) == found.end()) {
-                    found.insert(nextLocation);
-                    toVisit.push_back(nextLocation);
-                }
-            }
-        }
-        return result;
-    }
-
-    void initializeDefined() {
-
-        for (const llvm::Function& function : module) {
-            if (function.isDeclaration()) continue;
-
-            auto& block = function.getEntryBlock();
-            VRBBlock* vrblock = blockMapping.at(&block).get();
-
-            std::list<VRLocation*> toVisit = { vrblock->first() };
-
-            // prepare sets of defined values for each location
-            for (auto& instLocationPair : locationMapping)
-                defined.emplace(instLocationPair.second, std::set<const llvm::Value*>());
-
-            while (! toVisit.empty()) {
-                VRLocation* current = toVisit.front();
-                toVisit.pop_front();
-
-                for (VREdge* succEdge : current->getSuccessors()) {
-
-                    // if edge leads to nowhere, just continue
-                    VRLocation* succLoc = succEdge->target;
-                    if (! succLoc) continue;
-
-                    // if edge leads back, we would add values we exactly dont want
-                    if (succEdge->type == EdgeType::BACK) continue;
-
-                    auto& definedSucc = defined.at(succLoc);
-                    auto& definedHere = defined.at(current);
-
-                    // copy from this location to its successor
-                    definedSucc.insert(definedHere.begin(), definedHere.end());
-
-                    // add instruction, if edge carries any
-                    if (auto op = dynamic_cast<VRInstruction*>(succEdge->op.get()))
-                        definedSucc.emplace(op->getInstruction());
-
-                    toVisit.push_back(succLoc);
-                }
-            }
-        }
-    }
-
 
 public:
-    GraphAnalyzer(const llvm::Module& m,
+    RelationsAnalyzer(const llvm::Module& m,
                   std::map<const llvm::Instruction *, VRLocation *>& locs,
-                  std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs)
-                  : module(m), locationMapping(locs), blockMapping(blcs) {
-        categorizeEdges();
-        findLoops();
-        //initializeDefined();
-    }
+                  std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs,
+                  const StructureAnalyzer& sa)
+                  : module(m), locationMapping(locs), blockMapping(blcs), structure(sa) {}
 
     void analyze(unsigned maxPass) {
 
@@ -1029,4 +858,4 @@ public:
 } // namespace analysis
 } // namespace dg
 
-#endif // _DG_LLVM_VALUE_RELATION_GRAPH_ANALYZER_HPP_
+#endif // _DG_LLVM_VALUE_RELATION_RELATIONS_ANALYZER_HPP_

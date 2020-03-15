@@ -4,7 +4,7 @@
 #include <llvm/IR/Module.h>
 
 #include "GraphBuilder.hpp"
-#include "GraphAnalyzer.hpp"
+#include "RelationsAnalyzer.hpp"
 
 #ifndef NDEBUG
 #include "getValName.h"
@@ -245,9 +245,10 @@ public:
     AnalysisGraph(const llvm::Module& M, unsigned maxPass) : module(M) {
         GraphBuilder gb(module, locationMapping, blockMapping);
         gb.build();
-        
-        GraphAnalyzer ga(module, locationMapping, blockMapping);
-        ga.analyze(maxPass);
+
+        StructureAnalyzer sa(module, locationMapping, blockMapping);        
+        RelationsAnalyzer ra(module, locationMapping, blockMapping, sa);
+        ra.analyze(maxPass);
     }
 
     const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& getBlockMapping() const {
