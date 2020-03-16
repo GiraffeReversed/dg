@@ -82,6 +82,32 @@ namespace dg {
 namespace analysis {
 namespace vr {
 
+class EqualityBucket;
+
+using BucketPtr = EqualityBucket*;
+using BucketPtrSet = std::set<BucketPtr>;
+
+enum class Relation { EQ, LE, LT };
+
+struct Frame {
+	BucketPtr bucket;
+	typename BucketPtrSet::iterator it;
+	Relation relation;
+
+	Frame(BucketPtr b, typename BucketPtrSet::iterator i, Relation r):
+		bucket(b), it(i), relation(r) {}
+	
+	friend bool operator==(const Frame& lt, const Frame& rt) {
+		return lt.bucket == rt.bucket
+			&& lt.it == rt.it
+			&& lt.relation == rt.relation;
+	}
+
+	friend bool operator!=(const Frame& lt, const Frame& rt) {
+		return ! (lt == rt);
+	}
+};
+
 class EqualityBucket {
 
 	using T = const llvm::Value*;
@@ -97,49 +123,115 @@ class EqualityBucket {
 
 	std::vector<T> equalities;
 
-	using Frame = std::tuple<BucketPtr, typename BucketPtrSet::iterator, bool>;
+	struct Iterator {
 
-	std::pair<std::stack<Frame>, bool> subtreeContains(const EqualityBucket* needle, bool ignoreLE) {
+		using value_type = Frame;
+		using iterator_category = std::forward_iterator_tag;
+		using difference_type = std::ptrdiff_t;
 
-        std::set<const EqualityBucket*> visited;
 		std::stack<Frame> stack;
-
-		visited.insert(this);
-		stack.push(Frame(this, lesserEqual.begin(), ignoreLE));
-
-		BucketPtr bucketPtr;
-		typename BucketPtrSet::iterator successorIt;
-		bool ignore;
-		while (! stack.empty()) {
-			std::tie(bucketPtr, successorIt, ignore) = stack.top();
-			
-			// we found searched bucket
-			if (bucketPtr == needle) {
-				if (ignore)	return { std::stack<Frame>(), false };
-				return { stack, true };
+		std::set<const EqualityBucket*> visited;
+		bool goDown = false;
+		
+		Iterator() = default;
+		Iterator(EqualityBucket* start, bool down, bool begin): goDown(down) {
+			if (begin) {
+				stack.push(Frame(start,
+								 goDown ? start->lesserEqual.begin() : start->parents.begin(),
+								 Relation::EQ));
+				visited.insert(start);
 			}
+		}
 
+		friend bool operator==(const Iterator& lt, const Iterator& rt) {
+			return lt.goDown == rt.goDown && lt.stack == rt.stack;
+		}
+
+		friend bool operator!=(const Iterator& lt, const Iterator& rt) {
+			return ! (lt == rt);
+		}
+
+		const value_type& operator*() const { return stack.top(); }
+		const value_type* operator->() const { return &stack.top(); }
+
+		value_type& operator*() { return stack.top(); }
+		value_type* operator->() { return &stack.top(); }
+
+		Iterator& operator++() {
+			if (stack.empty()) return *this;
+
+			Frame frame = stack.top();
 			stack.pop();
 
 			// we searched all lesserEqual buckets, going on to lesser buckets
-			if (successorIt == bucketPtr->lesserEqual.end()) {
-				successorIt = bucketPtr->lesser.begin();
-				ignore = false;
-			}
-			
+			if (goDown && frame.it == frame.bucket->lesserEqual.end())
+				frame.it = frame.bucket->lesser.begin();
+
 			// we searched all successors
-			if (successorIt == bucketPtr->lesser.end()) {
-				continue;
-			}
+			if ((goDown && frame.it == frame.bucket->lesser.end())
+					|| (! goDown && frame.it == frame.bucket->parents.end()))
+				return *this;
 
 			// plan to return for next successor
-			stack.push({ bucketPtr, ++successorIt, ignore });
-			--successorIt;
+			stack.emplace(Frame(frame.bucket, ++frame.it, frame.relation));
+			--frame.it;
+
+			// we set relation for successor, so it can be no longer equal
+			if (frame.relation == Relation::EQ) frame.relation = Relation::LE;
+			// we pass lesser / greater edge, we know now that the relation is strict
+			if (frame.relation != Relation::LT
+					&& ((goDown && contains(frame.bucket->lesser, (*frame.it)))
+					    || (! goDown && contains((*frame.it)->lesser, frame.bucket))))
+				frame.relation = Relation::LT;
 
 			// plan visit to successor
-			if (! contains<const EqualityBucket*>(visited, *successorIt)) {
-				visited.insert(*successorIt);
-				stack.emplace(Frame(*successorIt, (*successorIt)->lesserEqual.begin(), ignore));
+			if (! contains<const EqualityBucket*>(visited, *frame.it)) {
+				visited.insert(*frame.it);
+				if (goDown)
+					stack.emplace(Frame(*frame.it, (*frame.it)->lesserEqual.begin(), frame.relation));
+				else
+					stack.emplace(Frame(*frame.it, (*frame.it)->parents.begin(), frame.relation));
+			}
+			return *this;
+		}
+
+		Iterator operator++(int) {
+			auto preInc = *this;
+			++(*this);
+			return preInc;
+		}
+
+		std::stack<Frame>& getStack() {
+			return stack;
+		}
+	};
+
+	using iterator = Iterator;
+	using const_iterator = Iterator;
+
+	iterator begin_down() {
+		return Iterator(this, true, true);
+	}
+
+	iterator end_down() {
+		return Iterator(this, true, false);
+	}
+
+	iterator begin_up() {
+		return Iterator(this, false, true);
+	}
+
+	iterator end_up() {
+		return Iterator(this, false, false);
+	}
+
+	std::pair<std::stack<Frame>, bool> subtreeContains(const EqualityBucket* needle, bool ignoreLE) {
+
+		for (auto it = begin_down(); it != end_down(); ++it) {
+
+			if (it->bucket == needle) {
+				if (ignoreLE && it->relation != Relation::LT) return { std::stack<Frame>(), false };
+				return { it.getStack(), true };
 			}
 		}
 
@@ -254,6 +346,94 @@ class RelationsGraph {
 
 	std::vector<RelationsGraph> xorRelations;
 
+	struct Iterator {
+		using value_type = std::pair<T, Relation>;
+
+		enum Type { UP, DOWN, ALL, NONE };
+
+		Type type = Type::NONE;
+		bool strictOnly = false;
+		EqualityBucket* start;
+		EqualityBucket::iterator it;
+		unsigned index;
+		
+		Iterator(EqualityBucket* st, bool s, Type t, bool begin): type(t), strictOnly(s), start(st), index(0) {
+			if (begin) {
+				if (type == Type::DOWN || type == Type::ALL)
+					it = start->begin_down();
+				if (type == Type::UP)
+					it = start->begin_up();
+				toStrictIfNeeded();
+			} else {
+				if (type == Type::DOWN)
+					it = start->end_down();
+				if (type == Type::UP || type == Type::ALL)
+					it = start->end_up();
+			}
+		}
+
+		friend bool operator==(const Iterator& lt, const Iterator& rt) {
+			return lt.type == rt.type
+			    && lt.strictOnly == rt.strictOnly
+				&& lt.it == rt.it;
+		}
+
+		friend bool operator!=(const Iterator& lt, const Iterator& rt) {
+			return ! (lt == rt);
+		}
+
+		value_type operator*() const {
+			if (it->relation != Relation::LE && strictOnly)
+				assert(0 && "iterator always stops at only at strict if demanded");
+			return { it->bucket->getEqual()[index], it->relation };
+		}
+
+		// make iterator always point at valid value or end
+		Iterator& operator++() {
+			if (it == start->end_up()) return *this;
+			if (it == start->end_down()) {
+				if (type != Type::ALL) return *this;
+
+				it = start->begin_up();
+				index = 0;
+				toStrictIfNeeded();
+				return *this;
+			}
+
+			if (index + 1 < it->bucket->equalities.size()) {
+				++index;
+				return *this;
+			}
+
+			++it;
+			index = 0;
+			toStrictIfNeeded();
+
+			if (it == start->end_down() && type == Type::ALL) {
+				it = start->begin_up();
+				toStrictIfNeeded();
+			}
+
+			return *this;
+		}
+
+		Iterator operator++(int) {
+			auto preInc = *this;
+			++(*this);
+			return preInc;
+		}
+		
+		private:
+		void toStrictIfNeeded() {
+			if (strictOnly) {
+				while (it != start->end_down()
+					&& it != start->end_up()
+					&& it->relation != Relation::LT)
+					++it;
+			}
+		}
+	};
+
 	bool inGraph(T val) const {
 		return contains(mapToBucket, val);
 	}
@@ -263,11 +443,8 @@ class RelationsGraph {
 	}
 
 	bool hasRelations(EqualityBucket* bucket) const {
-		return bucket->getEqual().size() > 1
-				|| nonEqualities.find(bucket) != nonEqualities.end()
-				|| ! bucket->lesser.empty()
-				|| ! bucket->lesserEqual.empty()
-				|| ! bucket->parents.empty();
+		return ++Iterator(bucket, false, Iterator::Type::ALL, true) 
+			  != Iterator(bucket, false, Iterator::Type::ALL, false);
 	}
 
 	bool hasRelationsOrLoads(EqualityBucket* bucket) const {
@@ -342,26 +519,28 @@ public:
             return false;
         }
 
-        for (auto& fst : ltVals) {
-            for (auto& snd : ltVals) {
-                if ((lt.isEqual(fst, snd) && ! rt.isEqual(fst, snd)) ||
-				    (lt.isLesser(fst, snd) && ! rt.isLesser(fst, snd)) ||
-					(lt.isLesser(snd, fst) && ! rt.isLesser(snd, fst)) ||
-					(lt.isLesserEqual(fst, snd) && ! rt.isLesserEqual(fst, snd)) ||
-					(lt.isLesserEqual(snd, fst) && ! rt.isLesserEqual(snd, fst)))
-					return false;
-            }
+        for (T val : ltVals) {
+			for (auto it = lt.begin_lesserEqual(val); it != lt.end_lesserEqual(val); ++it) {
+				T other; Relation relation;
+				std::tie(other, relation) = *it;
+				switch (relation) {
+					case Relation::EQ: if (! rt.isEqual(other, val))       return false; break;
+					case Relation::LE: if (! rt.isLesserEqual(other, val)) return false; break;
+					case Relation::LT: if (! rt.isLesser(other, val))      return false; break;
+				}
+			}
         }
 
-		for (auto& fst : rtVals) {
-            for (auto& snd : rtVals) {
-                if ((rt.isEqual(fst, snd) && ! lt.isEqual(fst, snd)) ||
-				    (rt.isLesser(fst, snd) && ! lt.isLesser(fst, snd)) ||
-					(rt.isLesser(snd, fst) && ! lt.isLesser(snd, fst)) ||
-					(rt.isLesserEqual(fst, snd) && ! lt.isLesserEqual(fst, snd)) ||
-					(rt.isLesserEqual(snd, fst) && ! lt.isLesserEqual(snd, fst)))
-					return false;
-            }
+		for (auto& val : rtVals) {
+			for (auto it = rt.begin_lesserEqual(val); it != rt.end_lesserEqual(val); ++it) {
+				T other; Relation relation;
+				std::tie(other, relation) = *it;
+				switch (relation) {
+					case Relation::EQ: if (! lt.isEqual(other, val))       return false; break;
+					case Relation::LE: if (! lt.isLesserEqual(other, val)) return false; break;
+					case Relation::LT: if (! lt.isLesser(other, val))      return false; break;
+				}
+			}
         }
 
 		std::set<std::pair<std::vector<T>, std::vector<T>>> ltLoads = lt.getAllLoads();
@@ -401,11 +580,6 @@ public:
 	// DANGER setEqual invalidates all EqualityBucket*
 	void setEqual(T lt, T rt) {
 
-		// DANGER defined duplicitly (already in subtreeContains)
-		using BucketPtr = EqualityBucket*;
-		using BucketPtrSet = std::set<BucketPtr>;
-		using Frame = std::tuple<BucketPtr, typename BucketPtrSet::iterator, bool>;
-
 		add(lt);
 		add(rt);
 
@@ -432,16 +606,15 @@ public:
 			}
 			std::stack<Frame> frames = pair.first;
 
-			Frame frame;
 			while (! frames.empty()) {
-				frame = frames.top();
-				BucketPtr bucket = std::get<0>(frame);
+				Frame frame = frames.top();
+				BucketPtr bucket = frame.bucket;
 				toMerge.push_back(bucket);
 				frames.pop();
 
 				// also unset lesserEqual relation
 				if (! frames.empty()) {
-					BucketPtr above = std::get<0>(frames.top());
+					BucketPtr above = frames.top().bucket;
 					above->lesserEqual.erase(bucket); bucket->parents.erase(above);
 				}
 			}
@@ -639,7 +812,7 @@ public:
 		}
     }
 
-	/*void unsetRelations(T val) {
+	void unsetRelations(T val) {
 		EqualityBucket* valBucketPtr = mapToBucket.at(val);
 
 		bool onlyReference = valBucketPtr->getEqual().size() == 1;
@@ -664,7 +837,7 @@ public:
 		for (auto& pair : nonEqualities) {
 			pair.second.erase(valBucketPtr);
 		}
-	}*/
+	}
 
 	bool isEqual(T lt, T rt) const {
 
@@ -737,6 +910,46 @@ public:
 		return valBucket->getEqual();
 	}
 
+	Iterator begin_lesser(T val) const {
+		return Iterator(mapToBucket.at(val), true, Iterator::Type::DOWN, true);
+	}
+
+	Iterator end_lesser(T val) const {
+		return Iterator(mapToBucket.at(val), true, Iterator::Type::DOWN, false);
+	}
+
+	Iterator begin_lesserEqual(T val) const {
+		return Iterator(mapToBucket.at(val), false, Iterator::Type::DOWN, true);
+	}
+
+	Iterator end_lesserEqual(T val) const {
+		return Iterator(mapToBucket.at(val), false, Iterator::Type::DOWN, false);
+	}
+
+	Iterator begin_greater(T val) const {
+		return Iterator(mapToBucket.at(val), true, Iterator::Type::UP, true);
+	}
+
+	Iterator end_greater(T val) const {
+		return Iterator(mapToBucket.at(val), true, Iterator::Type::UP, false);
+	}
+
+	Iterator begin_greaterEqual(T val) const {
+		return Iterator(mapToBucket.at(val), false, Iterator::Type::UP, true);
+	}
+
+	Iterator end_greaterEqual(T val) const {
+		return Iterator(mapToBucket.at(val), false, Iterator::Type::UP, false);
+	}
+
+	Iterator begin_all(T val) const {
+		return Iterator(mapToBucket.at(val), false, Iterator::Type::ALL, true);
+	}
+
+	Iterator end_all(T val) const {
+		return Iterator(mapToBucket.at(val), false, Iterator::Type::ALL, false);
+	}
+
 	std::vector<T> getSampleLesser(T val) const {
 		if (! inGraph(val)) return {};
 		EqualityBucket* bucketPtr = mapToBucket.at(val);
@@ -766,29 +979,10 @@ public:
 	}
 
 	std::vector<T> getAllRelated(T val) const {
-		if (! inGraph(val)) return std::vector<T>();
-
-		EqualityBucket* valBucket = mapToBucket.at(val);
-
-		std::vector<T> result = valBucket->getEqual();
-
-		auto found = nonEqualities.find(valBucket);
-		if (found != nonEqualities.end()) {
-			for (EqualityBucket* nonEqual : found->second) {
-				std::vector<T> vals = nonEqual->getEqual();
-				result.insert(result.end(), vals.begin(), vals.end());
-			}
+		std::vector<T> result;
+		for (auto it = begin_all(val); it != end_all(val); ++it) {
+			result.push_back((*it).first);
 		}
-
-		std::vector<EqualityBucket*> buckets;
-		valBucket->getRelatedBuckets(buckets, true);
-		valBucket->getRelatedBuckets(buckets, false);
-
-		for (EqualityBucket* bucket : buckets) {
-			std::vector<T> vals = bucket->getEqual();
-			result.insert(result.end(), vals.begin(), vals.end());
-		}
-
 		return result;
 	}
 
