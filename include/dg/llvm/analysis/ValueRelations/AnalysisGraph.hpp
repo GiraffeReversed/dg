@@ -16,8 +16,6 @@ namespace vr {
 
 class AnalysisGraph {
 
-    using RelationsGraph = RelationsGraph<const llvm::Value*>;
-
     const llvm::Module& module;
 
     // VRLocation corresponding to the state of the program BEFORE executing the instruction

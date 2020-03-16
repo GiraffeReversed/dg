@@ -40,8 +40,6 @@ namespace vr {
 
 class RelationsAnalyzer {
 
-    using RelationsGraph = RelationsGraph<const llvm::Value*>;
-
     const llvm::Module& module;
 
     // VRLocation corresponding to the state of the program BEFORE executing the instruction
@@ -502,12 +500,8 @@ class RelationsAnalyzer {
                     newGraph.setEqual(fst, snd);
                 if (relatesInAll(preds, fst, snd, &RelationsGraph::isLesser))
                     newGraph.setLesser(fst, snd);
-                if (relatesInAll(preds, snd, fst, &RelationsGraph::isLesser))
-                    newGraph.setLesser(snd, fst);
                 if (relatesInAll(preds, fst, snd, &RelationsGraph::isLesserEqual))
                     newGraph.setLesserEqual(fst, snd);
-                if (relatesInAll(preds, snd, fst, &RelationsGraph::isLesserEqual))
-                    newGraph.setLesserEqual(snd, fst);
             }
         }
 

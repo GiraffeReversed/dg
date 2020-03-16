@@ -84,7 +84,9 @@ namespace vr {
 
 class EqualityBucket {
 
-    template <typename S> friend class RelationsGraph;
+	using T = const llvm::Value*;
+
+    friend class RelationsGraph;
 
     using BucketPtr = EqualityBucket*;
 	using BucketPtrSet = std::set<BucketPtr>;
@@ -92,6 +94,8 @@ class EqualityBucket {
 	BucketPtrSet lesserEqual;
 	BucketPtrSet lesser;
 	BucketPtrSet parents;
+
+	std::vector<T> equalities;
 
 	using Frame = std::tuple<BucketPtr, typename BucketPtrSet::iterator, bool>;
 
@@ -158,6 +162,9 @@ class EqualityBucket {
 			else if (contains(parent->lesser,      &other)) parent->lesser.insert(this);
 			else assert(0); // was a parent so it must have been lesser or lesserEqual
 		}
+
+		equalities.insert(equalities.end(),
+						  other.equalities.begin(), other.equalities.end());
 	}
 
 	void disconnectAll() {
@@ -218,10 +225,24 @@ class EqualityBucket {
 			bucket->getRelatedBuckets(acc, goDown);
 		}		
 	}
+
+	std::vector<T>& getEqual() {
+		return equalities;
+	}
+
+	const std::vector<T>& getEqual() const {
+		return equalities;
+	}
+
+	T getAny() const {
+		assert(equalities.size() > 0);
+		return equalities[0];
+	}
 };
 
-template <typename T>
 class RelationsGraph {
+
+	using T = const llvm::Value*;
 
     std::vector<std::unique_ptr<EqualityBucket>> buckets;
 	std::map<T, EqualityBucket*> mapToBucket;
@@ -241,24 +262,8 @@ class RelationsGraph {
 		return contains(mapToBucket, lt) && contains(mapToBucket, rt);
 	}
 
-	std::vector<T> getEqual(const EqualityBucket* valBucket) const {
-		assert(valBucket);
-
-		T val = getAny(valBucket);
-		return getEqual(val);
-	}
-
-	T getAny(const EqualityBucket* bucket) const {
-		assert(bucket);
-
-		for (auto& pair : mapToBucket) {
-			if (pair.second == bucket) return pair.first;
-		}
-		assert(0 && "no value in passed bucket");
-	}
-
 	bool hasRelations(EqualityBucket* bucket) const {
-		return getEqual(bucket).size() > 1
+		return bucket->getEqual().size() > 1
 				|| nonEqualities.find(bucket) != nonEqualities.end()
 				|| ! bucket->lesser.empty()
 				|| ! bucket->lesserEqual.empty()
@@ -390,6 +395,7 @@ public:
 		EqualityBucket* newBucketPtr = new EqualityBucket;
 		buckets.emplace_back(newBucketPtr);
 		mapToBucket.emplace(val, newBucketPtr);
+		newBucketPtr->getEqual().push_back(val);
 	}
 
 	// DANGER setEqual invalidates all EqualityBucket*
@@ -593,7 +599,7 @@ public:
 
 		// if there is such a set, we just add val to it
 		if (valEqualBucketPtr) {
-			setEqual(val, getAny(valEqualBucketPtr));
+			setEqual(val, valEqualBucketPtr->getAny());
 		} else {
 			loads.emplace(fromBucketPtr, valBucketPtr);
 		}
@@ -611,7 +617,7 @@ public:
 		loads.erase(fromBucketPtr);
 
 		if (! hasRelationsOrLoads(valBucketPtr)) {
-			T val = getAny(valBucketPtr);
+			T val = valBucketPtr->getAny();
 			mapToBucket.erase(val);
 			eraseUniquePtr(buckets, valBucketPtr);
 		}
@@ -626,17 +632,17 @@ public:
 		
 		for (auto it = buckets.begin(); it != buckets.end(); ) {
 			if (! hasRelations(it->get())) {
-				T val = getAny(it->get());
+				T val = it->get()->getAny();
 				mapToBucket.erase(val);
 				it = buckets.erase(it);
 			} else ++it;
 		}
     }
 
-	void unsetRelations(T val) {
+	/*void unsetRelations(T val) {
 		EqualityBucket* valBucketPtr = mapToBucket.at(val);
 
-		bool onlyReference = getEqual(valBucketPtr).size() == 1;
+		bool onlyReference = valBucketPtr->getEqual().size() == 1;
 		if (! onlyReference) {
 			// val moves to its own equality bucket
 			mapToBucket.erase(val);
@@ -658,7 +664,7 @@ public:
 		for (auto& pair : nonEqualities) {
 			pair.second.erase(valBucketPtr);
 		}
-	}
+	}*/
 
 	bool isEqual(T lt, T rt) const {
 
@@ -728,17 +734,7 @@ public:
 		}
 		
 		const auto* valBucket = mapToBucket.at(val);
-
-		T other;
-		const EqualityBucket* otherBucket;
-		for (const auto& valueToBucket : mapToBucket) {
-			std::tie(other, otherBucket) = valueToBucket;
-			if (valBucket == otherBucket) {
-				result.push_back(other);
-			}
-		}
-		
-		return result;
+		return valBucket->getEqual();
 	}
 
 	std::vector<T> getSampleLesser(T val) const {
@@ -750,7 +746,7 @@ public:
 
 		std::vector<T> result;
 		for (EqualityBucket* bucketPtr : acc) {
-			result.push_back(getAny(bucketPtr));
+			result.push_back(bucketPtr->getAny());
 		}
 		return result;
 	}
@@ -764,7 +760,7 @@ public:
 
 		std::vector<T> result;
 		for (EqualityBucket* bucketPtr : acc) {
-			result.push_back(getAny(bucketPtr));
+			result.push_back(bucketPtr->getAny());
 		}
 		return result;
 	}
@@ -774,12 +770,12 @@ public:
 
 		EqualityBucket* valBucket = mapToBucket.at(val);
 
-		std::vector<T> result = getEqual(valBucket);
+		std::vector<T> result = valBucket->getEqual();
 
 		auto found = nonEqualities.find(valBucket);
 		if (found != nonEqualities.end()) {
 			for (EqualityBucket* nonEqual : found->second) {
-				std::vector<T> vals = getEqual(nonEqual);
+				std::vector<T> vals = nonEqual->getEqual();
 				result.insert(result.end(), vals.begin(), vals.end());
 			}
 		}
@@ -789,7 +785,7 @@ public:
 		valBucket->getRelatedBuckets(buckets, false);
 
 		for (EqualityBucket* bucket : buckets) {
-			std::vector<T> vals = getEqual(bucket);
+			std::vector<T> vals = bucket->getEqual();
 			result.insert(result.end(), vals.begin(), vals.end());
 		}
 
@@ -808,7 +804,7 @@ public:
 		EqualityBucket* valBucketPtr = mapToBucket.at(val);
 
 		EqualityBucket* fromBucketPtr = findByValue(loads, valBucketPtr);
-		return fromBucketPtr ? getEqual(fromBucketPtr) : std::vector<T>();
+		return fromBucketPtr ? fromBucketPtr->getEqual() : std::vector<T>();
 	}
 
 	std::vector<T> getValsByPtr(T from) {
@@ -816,13 +812,13 @@ public:
 		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
 
 		EqualityBucket* valBucketPtr = findByKey(loads, fromBucketPtr);
-		return valBucketPtr ? getEqual(valBucketPtr) : std::vector<T>();
+		return valBucketPtr ? valBucketPtr->getEqual() : std::vector<T>();
 	}
 
 	std::set<std::pair<std::vector<T>, std::vector<T>>> getAllLoads() const {
 		std::set<std::pair<std::vector<T>, std::vector<T>>> result;
 		for (const auto& pair : loads) {
-			result.emplace(getEqual(pair.first), getEqual(pair.second));
+			result.emplace(pair.first->getEqual(), pair.second->getEqual());
 		}
 		return result;
 	}
@@ -903,19 +899,19 @@ public:
 	}
 
 	void dump(std::ostream& stream, EqualityBucket* bucket) {
-		const auto& values = getEqual(bucket);
+		const auto& values = bucket->getEqual();
 
 		for (auto ptr : bucket->lesser)
-			printInterleaved(stream, getEqual(ptr), " < ", values);
+			printInterleaved(stream, ptr->getEqual(), " < ", values);
 
 		for (auto ptr : bucket->lesserEqual)
-			printInterleaved(stream, getEqual(ptr), " <= ", values);
+			printInterleaved(stream, ptr->getEqual(), " <= ", values);
 
 		auto foundNonEqual = nonEqualities.find(bucket);
 		if (foundNonEqual != nonEqualities.end()) {
 			for (EqualityBucket* nonEqual : foundNonEqual->second)
 				if (nonEqual < bucket)
-					printInterleaved(stream, getEqual(nonEqual), " != ", values);
+					printInterleaved(stream, nonEqual->getEqual(), " != ", values);
 		}
 
 		//EqualityBucket* foundKey = findByValue(loads, bucket);
@@ -924,7 +920,7 @@ public:
 
 		EqualityBucket* foundValue = findByKey(loads, bucket);
 		if (foundValue)
-			printInterleaved(stream, getEqual(foundValue), " = LOAD ", values);
+			printInterleaved(stream, foundValue->getEqual(), " = LOAD ", values);
 
 		if (bucket->lesser.empty() // values just equal and nothing else
 				&& bucket->lesserEqual.empty()

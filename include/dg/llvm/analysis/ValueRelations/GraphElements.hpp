@@ -138,7 +138,7 @@ struct VRLocation  {
 
     bool inLoop = false;
 
-    RelationsGraph<const llvm::Value *> relations;
+    RelationsGraph relations;
 
     std::vector<VREdge *> predecessors;
     std::vector<std::unique_ptr<VREdge>> successors;
