@@ -506,16 +506,40 @@ class RelationsAnalyzer {
         std::vector<const llvm::Value*> values = oldGraph.getAllValues();
 
         // merge from all predecessors
-        for (const llvm::Value* fst : values) {
-            for (const llvm::Value* snd : values) {
-                if (fst == snd) continue;
+        for (auto valueIt = values.begin(); valueIt != values.end(); ++valueIt) {
+            const llvm::Value* val = *valueIt;
 
-                if (relatesInAll(preds, fst, snd, &RelationsGraph::isEqual))
-                    newGraph.setEqual(fst, snd);
-                if (relatesInAll(preds, fst, snd, &RelationsGraph::isLesser))
-                    newGraph.setLesser(fst, snd);
-                if (relatesInAll(preds, fst, snd, &RelationsGraph::isLesserEqual))
-                    newGraph.setLesserEqual(fst, snd);
+            for (auto it = oldGraph.begin_lesserEqual(val);
+                      it != oldGraph.end_lesserEqual(val);
+                      ++it) {
+                const llvm::Value* related; Relation relation;
+                std::tie(related, relation) = *it;
+
+                if (related == val) continue;
+
+                switch (relation) {
+                    case Relation::EQ:
+                        if (relatesInAll(preds, related, val, &RelationsGraph::isEqual)) {
+                            newGraph.setEqual(related, val);
+
+                            auto found = std::find(values.begin(), values.end(), related);
+                            if (found != values.end()) {
+                                values.erase(found);
+                                valueIt = std::find(values.begin(), values.end(), val);
+                            }
+                        }
+                        break;
+
+                    case Relation::LT:
+                        if (relatesInAll(preds, related, val, &RelationsGraph::isLesser))
+                            newGraph.setLesser(related, val);
+                        break;
+
+                    case Relation::LE:
+                        if (relatesInAll(preds, related, val, &RelationsGraph::isLesserEqual))
+                            newGraph.setLesserEqual(related, val);
+                        break;
+                }
             }
         }
 
@@ -523,22 +547,8 @@ class RelationsAnalyzer {
         VRLocation* treePred = getTreePred(location);
         const RelationsGraph& treePredGraph = treePred->relations;
 
-        if (location->isJustLoopJoin()) {
-
-            std::vector<const llvm::Value*> values = treePredGraph.getAllValues();
-
-            for (const llvm::Value* fst : values) {
-                for (const llvm::Value* snd : values) {
-                    if (fst == snd) continue;
-
-                    if (treePredGraph.isEqual(fst, snd)) newGraph.setEqual(fst, snd);
-                    if (treePredGraph.isLesser(fst, snd)) newGraph.setLesser(fst, snd);
-                    if (treePredGraph.isLesser(snd, fst)) newGraph.setLesser(snd, fst);
-                    if (treePredGraph.isLesserEqual(fst, snd)) newGraph.setLesserEqual(fst, snd);
-                    if (treePredGraph.isLesserEqual(snd, fst)) newGraph.setLesserEqual(snd, fst);
-                }
-            }
-        }
+        if (location->isJustLoopJoin())
+            newGraph.merge(treePredGraph);
 
         // simply pass xor relations over tree edge
         newGraph.getXorRelations() = treePredGraph.getXorRelations();
