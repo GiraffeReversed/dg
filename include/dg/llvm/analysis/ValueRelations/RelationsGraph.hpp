@@ -395,6 +395,7 @@ class RelationsGraph {
 				if (type != Type::ALL) return *this;
 
 				it = start->begin_up();
+				strictOnly = true; // else we would pass equal again
 				index = 0;
 				toStrictIfNeeded();
 				return *this;
@@ -555,16 +556,38 @@ public:
 	}
 
 	void merge(const RelationsGraph& other) {
-		for (auto fst : other.getAllValues()) {
-			for (auto snd : other.getAllValues()) {
-				if (other.isEqual(fst, snd)) setEqual(fst, snd);
-				if (other.isLesser(fst, snd)) setLesser(fst, snd);
-				if (other.isLesserEqual(fst, snd)
-						&& ! other.isLesser(fst, snd)
-						&& ! other.isEqual(fst, snd)) setLesserEqual(fst, snd);
-				if (other.isLoad(fst, snd)) setLoad(fst, snd);
-			}
-		}
+		std::vector<const llvm::Value*> values = other.getAllValues();
+
+		for (auto valueIt = values.begin(); valueIt != values.end(); ++valueIt) {
+            const llvm::Value* val = *valueIt;
+
+            for (auto it = other.begin_lesserEqual(val);
+                      it != other.end_lesserEqual(val);
+                      ++it) {
+                const llvm::Value* related; Relation relation;
+                std::tie(related, relation) = *it;
+
+                if (related == val) continue;
+
+				//auto found = std::find(values.begin(), values.end(), related);
+                switch (relation) {
+                    case Relation::EQ: setEqual(related, val);
+
+						if (true) { // cannot initialize found directly in case
+							auto found = std::find(values.begin(), values.end(), related);
+							if (found != values.end()) {
+								values.erase(found);
+								valueIt = std::find(values.begin(), values.end(), val);
+							}
+						}
+                        break;
+
+                    case Relation::LT: setLesser(related, val); break;
+
+                    case Relation::LE: setLesserEqual(related, val); break;
+                }
+            }
+        }
 	}
 
 	void add(T val) {
