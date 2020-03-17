@@ -443,8 +443,7 @@ class RelationsGraph {
 	}
 
 	bool hasRelations(EqualityBucket* bucket) const {
-		return ++Iterator(bucket, false, Iterator::Type::ALL, true) 
-			  != Iterator(bucket, false, Iterator::Type::ALL, false);
+		return ++begin_all(bucket->getAny()) != end_all(bucket->getAny());
 	}
 
 	bool hasRelationsOrLoads(EqualityBucket* bucket) const {
@@ -863,20 +862,45 @@ public:
 
 	bool isLesser(T lt, T rt) const {
 
-		if (! areInGraph(lt, rt))
-			return false;
+		if (! inGraph(rt)) return false;
 
-		const auto& rtEqBucket = mapToBucket.at(rt);
-		return rtEqBucket->subtreeContains(mapToBucket.at(lt), true).second;
+		if (inGraph(lt)) {
+			const auto& rtEqBucket = mapToBucket.at(rt);
+			if (rtEqBucket->subtreeContains(mapToBucket.at(lt), true).second)
+				return true;
+		}
+		
+		if (auto constLt = llvm::dyn_cast<llvm::ConstantInt>(lt)) {
+			const llvm::ConstantInt* constBound = getLesserEqualConstant(rt);
+			if (constBound && constLt->getValue().slt(constBound->getValue()))
+				return true;
+		}
+
+		return false;
 	}
 
 	bool isLesserEqual(T lt, T rt) const {
 
-		if (! areInGraph(lt, rt))
-			return false;
+		//std::cerr << "lt " << debug::getValName(lt) << std::endl;
+		//std::cerr << "rt " << debug::getValName(rt) << std::endl;
 
-		const auto& rtEqBucket = mapToBucket.at(rt);
-		return rtEqBucket->subtreeContains(mapToBucket.at(lt), false).second;
+		if (! inGraph(rt)) return false;
+
+		if (inGraph(lt)) {
+			const auto& rtEqBucket = mapToBucket.at(rt);
+			if (rtEqBucket->subtreeContains(mapToBucket.at(lt), false).second)
+				return true;
+		}
+		
+		if (auto constLt = llvm::dyn_cast<llvm::ConstantInt>(lt)) {
+			const llvm::ConstantInt* constBound = getLesserEqualConstant(rt);
+			//std::cerr << "constLt" << debug::getValName(constLt) << std::endl;
+			//std::cerr << "constBound " << (constBound ? debug::getValName(constBound) : "nullptr") << std::endl;
+			if (constBound && constLt->getValue().sle(constBound->getValue()))
+				return true;
+		}
+
+		return false;
 	}
 
 	bool isLoad(T from, T val) const {
@@ -984,6 +1008,18 @@ public:
 			result.push_back((*it).first);
 		}
 		return result;
+	}
+
+	const llvm::ConstantInt* getLesserEqualConstant(T val) const {
+
+		const llvm::ConstantInt* highest = nullptr;
+		for (auto it = begin_lesserEqual(val); it != end_lesserEqual(val); ++it) {
+			if (auto constant = llvm::dyn_cast<llvm::ConstantInt>((*it).first)) {
+				if (! highest || constant->getValue().sgt(highest->getValue()))
+					highest = constant;
+			}
+		}
+		return highest;
 	}
 
 	std::vector<T> getAllValues() const {
