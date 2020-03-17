@@ -227,6 +227,13 @@ class RelationsAnalyzer {
             // param < greater => param + 1 <= greater
             if (c1->isOne()) solvesDiffOne(graph, param, add, false);
         }
+
+        const llvm::ConstantInt* constBound = graph.getLesserEqualConstant(param);
+        if (constBound) {
+            const llvm::APInt& boundResult = constBound->getValue() + c2->getValue();
+            const llvm::Constant* llvmResult = llvm::ConstantInt::get(add->getType(), boundResult);
+            graph.setLesser(llvmResult, add);
+        }
     }
 
     void subGen(RelationsGraph& graph, const llvm::BinaryOperator* sub) {
@@ -259,6 +266,13 @@ class RelationsAnalyzer {
 
             // lesser < param  ==>  lesser <= param - 1
             if (c2->isOne()) solvesDiffOne(graph, param, sub, true);
+        }
+
+        const llvm::ConstantInt* constBound = graph.getLesserEqualConstant(param);
+        if (constBound) {
+            const llvm::APInt& boundResult = constBound->getValue() - c2->getValue();
+            const llvm::Constant* llvmResult = llvm::ConstantInt::get(sub->getType(), boundResult);
+            graph.setLesser(llvmResult, sub);
         }
     }
 
