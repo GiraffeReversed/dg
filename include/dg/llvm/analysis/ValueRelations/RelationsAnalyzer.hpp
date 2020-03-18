@@ -176,22 +176,13 @@ class RelationsAnalyzer {
         for (auto& fromsValues : graph.getAllLoads()) {
             for (const llvm::Value* from : fromsValues.first) {
                 if (auto otherGep = llvm::dyn_cast<llvm::GetElementPtrInst>(from)) {
-                    if (allGepParametersAreEqual(graph, gep, otherGep))
+                    if (operandsEqual(graph, gep, otherGep, true))
                         graph.setEqual(gep, otherGep);
                 }
             }
         }
         // TODO something more?
         // indices method gives iterator over indices
-    }
-
-    bool allGepParametersAreEqual(const RelationsGraph& graph,
-                                  const llvm::GetElementPtrInst* gepOne,
-                                  const llvm::GetElementPtrInst* gepTwo) const {
-        for (int i = 0; i < fmin(gepOne->getNumOperands(), gepTwo->getNumOperands()); i++) {
-            if (! graph.isEqual(gepOne->getOperand(i), gepTwo->getOperand(i))) return false;
-        }
-        return true;
     }
 
     void extGen(RelationsGraph& graph, const llvm::CastInst* ext) {
@@ -842,9 +833,9 @@ class RelationsAnalyzer {
             auto& vrblockPtr = pair.second;
 
             for (auto& locationPtr : vrblockPtr->locations) {
-                std::cerr << "LOCATION " << locationPtr->id << std::endl;
-                for (VREdge* predEdge : locationPtr->predecessors) 
-                    std::cerr << predEdge->op->toStr() << std::endl;
+                //std::cerr << "LOCATION " << locationPtr->id << std::endl;
+                //for (VREdge* predEdge : locationPtr->predecessors) 
+                //    std::cerr << predEdge->op->toStr() << std::endl;
 
                 if (locationPtr->predecessors.size() > 1) {
                     changed = mergeRelations(locationPtr.get())
@@ -853,7 +844,7 @@ class RelationsAnalyzer {
                     VREdge* edge = locationPtr->predecessors[0];
                     changed |= processOperation(edge->source, edge->target, edge->op.get());
                 } // else no predecessors => nothing to be passed
-                locationPtr->relations.ddump();
+                //locationPtr->relations.ddump();
             }
 
         }
@@ -907,9 +898,9 @@ public:
         bool changed = true;
         unsigned passNum = 0;
         while (changed && ++passNum <= maxPass) {
-            std::cerr << "========================================================" << std::endl;
-            std::cerr << "                     PASS NUMBER " << passNum             << std::endl;
-            std::cerr << "========================================================" << std::endl;
+            //std::cerr << "========================================================" << std::endl;
+            //std::cerr << "                     PASS NUMBER " << passNum             << std::endl;
+            //std::cerr << "========================================================" << std::endl;
             changed = analysisPass();
         }
     }
