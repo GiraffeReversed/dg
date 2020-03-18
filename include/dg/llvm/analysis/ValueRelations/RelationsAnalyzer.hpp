@@ -203,6 +203,9 @@ class RelationsAnalyzer {
         auto c2 = llvm::dyn_cast<llvm::ConstantInt>(add->getOperand(1));
         // TODO check wheter equal to constant
 
+        solveEquality(graph, add);
+        solveCommutativity(graph, add);
+
         if (solvesSameType(graph, c1, c2, add)) return;
 
         const llvm::Value* param = nullptr;
@@ -240,6 +243,8 @@ class RelationsAnalyzer {
         auto c1 = llvm::dyn_cast<llvm::ConstantInt>(sub->getOperand(0));
         auto c2 = llvm::dyn_cast<llvm::ConstantInt>(sub->getOperand(1));
         // TODO check wheter equal to constant
+
+        solveEquality(graph, sub);
 
         if (solvesSameType(graph, c1, c2, sub)) return;
 
@@ -280,6 +285,9 @@ class RelationsAnalyzer {
         auto c1 = llvm::dyn_cast<llvm::ConstantInt>(mul->getOperand(0));
         auto c2 = llvm::dyn_cast<llvm::ConstantInt>(mul->getOperand(1));
         // TODO check wheter equal to constant
+
+        solveEquality(graph, mul);
+        solveCommutativity(graph, mul);
 
         if (solvesSameType(graph, c1, c2, mul)) return;
 
@@ -353,6 +361,38 @@ class RelationsAnalyzer {
         for (const llvm::Value* value : sample)
             if (getLesser) graph.setLesserEqual(value, op);
             else           graph.setLesserEqual(op, value);
+    }
+
+    bool operandsEqual(RelationsGraph& graph,
+                       const llvm::Instruction* fst,
+                       const llvm::Instruction* snd,
+                       bool sameOrder) const { // false means checking in reverse order
+        unsigned total = fst->getNumOperands();
+        if (total != snd->getNumOperands()) return false;
+
+        for (unsigned i = 0; i < total; ++i) {
+            unsigned otherI = sameOrder ? i : total - i - 1;
+
+            if (! graph.isEqual(fst->getOperand(i), snd->getOperand(otherI))) return false;
+        }
+        return true;
+    }
+
+    void solveByOperands(RelationsGraph& graph, const llvm::BinaryOperator* operation, bool sameOrder) {
+        for (auto same : structure.getInstructionSetFor(operation->getOpcode())) {
+            auto sameOperation = llvm::dyn_cast<const llvm::BinaryOperator>(same);
+
+            if (operandsEqual(graph, operation, sameOperation, sameOrder))
+                graph.setEqual(operation, sameOperation);
+        }
+    }
+
+    void solveEquality(RelationsGraph& graph, const llvm::BinaryOperator* operation) {
+        solveByOperands(graph, operation, true);
+    }
+
+    void solveCommutativity(RelationsGraph& graph, const llvm::BinaryOperator* operation) {
+        solveByOperands(graph, operation, false);
     }
 
     void remGen(RelationsGraph& graph, const llvm::BinaryOperator* rem) {
