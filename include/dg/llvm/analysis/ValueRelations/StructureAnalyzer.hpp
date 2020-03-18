@@ -43,6 +43,12 @@ class StructureAnalyzer {
     // holds vector of values, which are defined at given location
     std::map<VRLocation*, std::set<const llvm::Value*>> defined;
 
+    const std::vector<unsigned> collected = { llvm::Instruction::Add,
+                                              llvm::Instruction::Sub,
+                                              llvm::Instruction::Mul };
+
+    std::map<unsigned, std::set<const llvm::Instruction*>> instructionSets;
+
     void categorizeEdges(const llvm::Module& module, const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping) {
         for (auto& function : module) {
             if (function.isDeclaration()) continue;
@@ -210,6 +216,24 @@ class StructureAnalyzer {
         }
     }
 
+    void collectInstructionSet(const llvm::Module& module) {
+        for (unsigned opcode : collected)
+            instructionSets.emplace(opcode, std::set<const llvm::Instruction*>());
+
+        for (const llvm::Function& function : module) {
+            for (const llvm::BasicBlock& block : function) {
+                for (const llvm::Instruction& inst : block) {
+
+                    // if we collect instructions with this opcode
+                    // add it to its set
+                    auto found = instructionSets.find(inst.getOpcode());
+                    if (found != instructionSets.end())
+                        found->second.emplace(&inst);
+                }
+            }
+        }
+    }
+
 
 public:
     StructureAnalyzer(const llvm::Module& m,
@@ -217,6 +241,7 @@ public:
                   std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs) {
         categorizeEdges(m, blcs);
         findLoops(locs);
+        collectInstructionSet(m);
         //initializeDefined(m, blcs);
     }
 
@@ -230,6 +255,10 @@ public:
     // assumes that location is valid loop start (join of tree and back edges)
     const std::vector<const llvm::Instruction*>& getInloopValues(VRLocation* const location) const {
         return inloopValues.at(location);
+    }
+
+    const std::set<const llvm::Instruction*>& getInstructionSetFor(unsigned opcode) const {
+        return instructionSets.at(opcode);
     }
 };
 
