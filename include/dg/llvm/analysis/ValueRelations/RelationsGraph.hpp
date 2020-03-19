@@ -444,7 +444,8 @@ class RelationsGraph {
 	}
 
 	bool hasRelations(EqualityBucket* bucket) const {
-		return ++begin_all(bucket->getAny()) != end_all(bucket->getAny());
+		return bucket->getEqual().empty()
+			|| ++begin_all(bucket->getAny()) != end_all(bucket->getAny());
 	}
 
 	bool hasRelationsOrLoads(EqualityBucket* bucket) const {
@@ -816,8 +817,10 @@ public:
 		loads.erase(fromBucketPtr);
 
 		if (! hasRelationsOrLoads(valBucketPtr)) {
-			T val = valBucketPtr->getAny();
-			mapToBucket.erase(val);
+			if (! valBucketPtr->getEqual().empty()) {
+				T val = valBucketPtr->getAny();
+				mapToBucket.erase(val);
+			}
 			eraseUniquePtr(buckets, valBucketPtr);
 		}
 		if (! hasRelationsOrLoads(fromBucketPtr)) {
@@ -831,8 +834,10 @@ public:
 		
 		for (auto it = buckets.begin(); it != buckets.end(); ) {
 			if (! hasRelations(it->get())) {
-				T val = it->get()->getAny();
-				mapToBucket.erase(val);
+				if (! it->get()->getEqual().empty()) {
+					T val = it->get()->getAny();
+					mapToBucket.erase(val);
+				}
 				it = buckets.erase(it);
 			} else ++it;
 		}
@@ -1008,7 +1013,8 @@ public:
 
 		std::vector<T> result;
 		for (EqualityBucket* bucketPtr : acc) {
-			result.push_back(bucketPtr->getAny());
+			if (! bucketPtr->getEqual().empty())
+				result.push_back(bucketPtr->getAny());
 		}
 		return result;
 	}
@@ -1022,7 +1028,8 @@ public:
 
 		std::vector<T> result;
 		for (EqualityBucket* bucketPtr : acc) {
-			result.push_back(bucketPtr->getAny());
+			if (! bucketPtr->getEqual().empty())
+				result.push_back(bucketPtr->getAny());
 		}
 		return result;
 	}
