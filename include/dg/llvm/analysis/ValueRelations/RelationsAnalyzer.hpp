@@ -780,10 +780,12 @@ class RelationsAnalyzer {
                     if (inloopPred->relations.isLesser(firstLoadInLoop, valInloop)) {
                         newGraph.setLesserEqual(valsOutloop[0], firstLoadInLoop);
                         newGraph.setLoad(from, firstLoadInLoop);
+                        newGraph.makePlaceholder(firstLoadInLoop);
                     }
                     if (inloopPred->relations.isLesser(valInloop, firstLoadInLoop)) {
                         newGraph.setLesserEqual(firstLoadInLoop, valsOutloop[0]);
                         newGraph.setLoad(from, firstLoadInLoop);
+                        newGraph.makePlaceholder(firstLoadInLoop);
                     }
                 }
             }
