@@ -408,6 +408,9 @@ class RelationsGraph {
 
 			++it;
 			index = 0;
+			while (it != start->end_down()
+				&& it != start->end_up()
+				&& it->bucket->getEqual().empty()) ++it;
 			toStrictIfNeeded();
 
 			if (it == start->end_down() && type == Type::ALL) {
