@@ -87,7 +87,7 @@ class EqualityBucket;
 using BucketPtr = EqualityBucket*;
 using BucketPtrSet = std::set<BucketPtr>;
 
-enum class Relation { EQ, LE, LT };
+enum class Relation { EQ, LE, LT, GE, GT };
 
 struct Frame {
 	BucketPtr bucket;
@@ -177,12 +177,11 @@ class EqualityBucket {
 			--frame.it;
 
 			// we set relation for successor, so it can be no longer equal
-			if (frame.relation == Relation::EQ) frame.relation = Relation::LE;
+			if (frame.relation == Relation::EQ && goDown) frame.relation = Relation::LE;
+			if (frame.relation == Relation::EQ && ! goDown) frame.relation = Relation::GE;
 			// we pass lesser / greater edge, we know now that the relation is strict
-			if (frame.relation != Relation::LT
-					&& ((goDown && contains(frame.bucket->lesser, (*frame.it)))
-					    || (! goDown && contains((*frame.it)->lesser, frame.bucket))))
-				frame.relation = Relation::LT;
+			if (goDown && contains(frame.bucket->lesser, (*frame.it))) frame.relation = Relation::LT;
+			if (! goDown && contains((*frame.it)->lesser, frame.bucket)) frame.relation = Relation::GT;
 
 			// plan visit to successor
 			if (! contains<const EqualityBucket*>(visited, *frame.it)) {
@@ -434,7 +433,7 @@ class RelationsGraph {
 			if (strictOnly) {
 				while (it != start->end_down()
 					&& it != start->end_up()
-					&& it->relation != Relation::LT)
+					&& (it->relation != Relation::LT || it->relation != Relation::GT))
 					++it;
 			}
 		}
@@ -539,6 +538,7 @@ public:
 					case Relation::EQ: if (! rt.isEqual(other, val))       return false; break;
 					case Relation::LE: if (! rt.isLesserEqual(other, val)) return false; break;
 					case Relation::LT: if (! rt.isLesser(other, val))      return false; break;
+					default: assert(0 && "going down, not up");
 				}
 			}
         }
@@ -551,6 +551,7 @@ public:
 					case Relation::EQ: if (! lt.isEqual(other, val))       return false; break;
 					case Relation::LE: if (! lt.isLesserEqual(other, val)) return false; break;
 					case Relation::LT: if (! lt.isLesser(other, val))      return false; break;
+					default: assert(0 && "going down, not up");
 				}
 			}
         }
@@ -598,6 +599,8 @@ public:
                     case Relation::LT: setLesser(related, val); break;
 
                     case Relation::LE: setLesserEqual(related, val); break;
+
+					default: assert(0 && "going down, not up");
                 }
             }
         }
@@ -1196,19 +1199,25 @@ public:
 		return result;
 	}
 
-	void printVals(std::ostream& stream, const std::vector<T>& vals) const {
+	void printVals(std::ostream& stream, const EqualityBucket* bucket) const {
 		stream << "{ ";
-		for (auto val : vals) {
+
+		for (auto pair : placeholderBuckets) {
+			if (pair.second == bucket) stream << "placeholder " << pair.first << " ";
+		}
+
+		for (auto val : bucket->getEqual()) {
 			stream << strip(debug::getValName(val)) << "; ";
 		}
+
 		stream << "}";
 	}
 
-	void printInterleaved(std::ostream& stream, const std::vector<T>& v1,
-						  std::string sep, const std::vector<T>& v2) const {
-		printVals(stream, v1);
+	void printInterleaved(std::ostream& stream, const EqualityBucket* e1,
+						  std::string sep, const EqualityBucket* e2) const {
+		printVals(stream, e1);
 		stream << sep;
-		printVals(stream, v2);
+		printVals(stream, e2);
 		if (&stream == &std::cout)
 			stream << "\\r";
 		else
@@ -1242,19 +1251,19 @@ public:
 	}
 
 	void dump(std::ostream& stream, EqualityBucket* bucket) {
-		const auto& values = bucket->getEqual();
+		//const auto& values = bucket->getEqual();
 
 		for (auto ptr : bucket->lesser)
-			printInterleaved(stream, ptr->getEqual(), " < ", values);
+			printInterleaved(stream, ptr, " < ", bucket);
 
 		for (auto ptr : bucket->lesserEqual)
-			printInterleaved(stream, ptr->getEqual(), " <= ", values);
+			printInterleaved(stream, ptr, " <= ", bucket);
 
 		auto foundNonEqual = nonEqualities.find(bucket);
 		if (foundNonEqual != nonEqualities.end()) {
 			for (EqualityBucket* nonEqual : foundNonEqual->second)
 				if (nonEqual < bucket)
-					printInterleaved(stream, nonEqual->getEqual(), " != ", values);
+					printInterleaved(stream, nonEqual, " != ", bucket);
 		}
 
 		//EqualityBucket* foundKey = findByValue(loads, bucket);
@@ -1263,7 +1272,7 @@ public:
 
 		EqualityBucket* foundValue = findByKey(loads, bucket);
 		if (foundValue)
-			printInterleaved(stream, foundValue->getEqual(), " = LOAD ", values);
+			printInterleaved(stream, foundValue, " = LOAD ", bucket);
 
 		if (bucket->lesser.empty() // values just equal and nothing else
 				&& bucket->lesserEqual.empty()
@@ -1271,7 +1280,7 @@ public:
 				&& foundNonEqual == nonEqualities.end()
 				&& ! findByValue(loads, bucket)
 				&& ! foundValue) {
-			printVals(stream, values);
+			printVals(stream, bucket);
 			stream << std::endl;
 		}
 	}
