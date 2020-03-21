@@ -336,6 +336,18 @@ class RelationsGraph {
 
 	using T = const llvm::Value*;
 
+public:
+	struct CallRelation {
+		std::vector<std::pair<const llvm::Value*, const llvm::Value*>> equalPairs;
+		RelationsGraph* callSiteRelations = nullptr;
+
+		friend bool operator==(const CallRelation& lt, const CallRelation& rt) {
+			return lt.equalPairs == rt.equalPairs
+				&& lt.callSiteRelations == rt.callSiteRelations;
+		}
+	};
+
+private:
     std::vector<std::unique_ptr<EqualityBucket>> buckets;
 	std::map<T, EqualityBucket*> mapToBucket;
 	std::map<unsigned, EqualityBucket*> placeholderBuckets;
@@ -346,7 +358,7 @@ class RelationsGraph {
 	// map of pairs (a, b) such that {any of b} = load {any of a}
 	std::map<EqualityBucket*, EqualityBucket*> loads;
 
-	std::vector<RelationsGraph> xorRelations;
+	std::vector<CallRelation> callRelations;
 
 	struct Iterator {
 		using value_type = std::pair<T, Relation>;
@@ -464,7 +476,7 @@ public:
 	RelationsGraph() = default;
 	
 	RelationsGraph(const RelationsGraph& other):
-		lastPlaceholderId(other.lastPlaceholderId), xorRelations(other.xorRelations) {
+		lastPlaceholderId(other.lastPlaceholderId), callRelations(other.callRelations) {
 
 		std::map<EqualityBucket*, EqualityBucket*> oldToNewPtr;
 
@@ -509,7 +521,7 @@ public:
 		swap(first.lastPlaceholderId, second.lastPlaceholderId);
 		swap(first.nonEqualities, second.nonEqualities);
 		swap(first.loads, second.loads);
-		swap(first.xorRelations, second.xorRelations);
+		swap(first.callRelations, second.callRelations);
 	}
 
 	RelationsGraph& operator=(RelationsGraph other) {
@@ -630,7 +642,7 @@ public:
 			}
 		}
 
-		return lt.xorRelations == rt.xorRelations;
+		return lt.callRelations == rt.callRelations;
 	}
 
 	friend bool operator!=(const RelationsGraph& lt, const RelationsGraph& rt) {
@@ -1221,22 +1233,21 @@ public:
 		return result;
 	}
 
-	RelationsGraph& newXorRelation() {
-		xorRelations.emplace_back();
-		return xorRelations.back();
+	CallRelation& newCallRelation() {
+		callRelations.emplace_back();
+		return callRelations.back();
 	}
 
-	const std::vector<RelationsGraph>& getXorRelations() const {
-		return xorRelations;
+	const std::vector<CallRelation>& getCallRelations() const {
+		return callRelations;
 	}
 
-	std::vector<RelationsGraph>& getXorRelations() {
-		const RelationsGraph* constThis = this;
-		return const_cast<std::vector<RelationsGraph>&>(constThis->getXorRelations());
+	std::vector<CallRelation>& getCallRelations() {
+		return callRelations;
 	}
 
-	void addXorRelation(const RelationsGraph& otherGraph) {
-		xorRelations.emplace_back(otherGraph);
+	void addXorRelation(const CallRelation& relation) {
+		callRelations.emplace_back(relation);
 	}
 
 	void makePlaceholder(T val) {
@@ -1366,13 +1377,18 @@ public:
 
     void generalDump(std::ostream& stream) {
 
+		stream << " THE GRAPH" << std::endl;
 		for (const auto& bucketPtr : buckets) {
 			dump(stream, bucketPtr.get());
 		}
 
-		for (auto& rg : xorRelations) {
+		for (auto& callRelation : callRelations) {
 			stream << std::endl << "    XOR relations" << std::endl;
-			rg.generalDump(stream);
+			for (auto& equalPair : callRelation.equalPairs)
+				stream << "{ " << debug::getValName(equalPair.first) << "; "
+							   << debug::getValName(equalPair.second)
+					   << " }" << std::endl;
+			callRelation.callSiteRelations->generalDump(stream);
 		}
 
     }

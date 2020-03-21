@@ -596,7 +596,7 @@ class RelationsAnalyzer {
             newGraph.merge(treePredGraph);
 
         // simply pass xor relations over tree edge
-        newGraph.getXorRelations() = treePredGraph.getXorRelations();
+        newGraph.getCallRelations() = treePredGraph.getCallRelations();
 
         return andSwapIfChanged(location->relations, newGraph);
     }
@@ -931,7 +931,7 @@ class RelationsAnalyzer {
         return true;
     }
 
-    void prepareXorGraphs() {
+    void initializeCallRelations() {
         for (const llvm::Function& function : module) {
             if (function.isDeclaration())
                 continue;
@@ -946,59 +946,25 @@ class RelationsAnalyzer {
                 const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
                 if (! call) continue;
 
-                vrblockOfEntry->first()->relations.newXorRelation();
-            }
-        }
-    }
+                RelationsGraph::CallRelation& callRelation = vrblockOfEntry->first()->relations.newCallRelation();
+                // set pointer to relations valid at call
+                callRelation.callSiteRelations = &locationMapping.at(call)->relations;
 
-    bool passCallSiteRelations() {
-        bool changed = false;
-        for (const llvm::Function& function : module) {
-            if (function.isDeclaration())
-                continue;
-            
-            VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
-            assert(vrblockOfEntry);
-
-            VRLocation* vrlocOfEntry = vrblockOfEntry->first();
-
-            RelationsGraph newGraph = vrlocOfEntry->relations;
-
-            // for each location, where the function is called
-            unsigned userIndex = 0;
-            for (const llvm::Value* user : function.users()) {
-
-                // get call from user
-                const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
-                if (! call) continue;
-
-                // remember call for merging of loads and relations
-                VRLocation* vrlocOfCall = locationMapping.at(call);
-                assert(vrlocOfCall);
-                
-                RelationsGraph& xorGraph = newGraph.getXorRelations().at(userIndex);
-                xorGraph = vrlocOfCall->relations;
-
+                // set formal parameters equal to real
                 unsigned argCount = 0;
                 for (const llvm::Argument& receivedArg : function.args()) {
                     if (argCount > call->getNumArgOperands()) break;
                     const llvm::Value* sentArg = call->getArgOperand(argCount);
 
-                    xorGraph.setEqual(sentArg, &receivedArg);
-
+                    callRelation.equalPairs.emplace_back(sentArg, &receivedArg);
                     ++argCount;
                 }
-
-                ++userIndex;
             }
-            changed |= andSwapIfChanged(vrlocOfEntry->relations, newGraph);
         }
-        return changed;
     }
 
     bool analysisPass() {
         bool changed = false;
-        changed |= passCallSiteRelations();
 
         for (auto& pair : blockMapping) {
             auto& vrblockPtr = pair.second;
@@ -1065,7 +1031,7 @@ public:
 
     void analyze(unsigned maxPass) {
 
-        prepareXorGraphs();
+        initializeCallRelations();
 
         bool changed = true;
         unsigned passNum = 0;

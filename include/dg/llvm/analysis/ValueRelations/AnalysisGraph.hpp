@@ -225,14 +225,16 @@ public:
         if (! gep) return "unknown";
 
         auto& relations = locationMapping.at(gep)->relations;
-        if (relations.getXorRelations().empty())
+        if (relations.getCallRelations().empty())
             return isValidForGraph(relations, gep, readSize);
 
         // else we have to check that access is valid in every case
-        for (RelationsGraph& xorGraph : relations.getXorRelations()) {
+        for (const RelationsGraph::CallRelation& callRelation : relations.getCallRelations()) {
             RelationsGraph merged = relations;
-            merged.merge(xorGraph);
-            merged.getXorRelations().clear();
+            for (auto& equalPair : callRelation.equalPairs)
+                merged.setEqual(equalPair.first, equalPair.second);
+            merged.merge(*callRelation.callSiteRelations);
+            merged.getCallRelations().clear();
 
             std::string result = isValidForGraph(merged, gep, readSize);
             if (result != "true") return result;
