@@ -707,8 +707,10 @@ class RelationsAnalyzer {
     }
 
     bool mergeRelationsByLoads(VRLocation* location) {
-        const std::vector<VRLocation*>& preds = location->getPredLocations();
+        return mergeRelationsByLoads(location->getPredLocations(), location);
+    }
 
+    bool mergeRelationsByLoads(const std::vector<VRLocation*>& preds, VRLocation* location) {
         RelationsGraph newGraph = location->relations;
         RelationsGraph& oldGraph = preds[0]->relations;
 
@@ -725,6 +727,12 @@ class RelationsAnalyzer {
                     froms.emplace_back(from);
             }
         }
+
+        //for (auto from : froms)
+        //    std::cerr << "from" << debug::getValName(from) << std::endl;
+    
+        //std::cerr << "before before" << std::endl;
+        //newGraph.ddump();
 
         // infer some invariants in loop
         if (preds.size() == 2 && location->isJustLoopJoin()) {
@@ -773,28 +781,41 @@ class RelationsAnalyzer {
                         = outloopPred->relations.getValsByPtr(from);
                     if (valsOutloop.empty()) continue;
 
-                    for (const llvm::Value* val : valsOutloop) {
-                        newGraph.setEqual(valsOutloop[0], val);
-                    }
+                    bool setSomething = false;
+                    unsigned placeholder = newGraph.newPlaceholderBucket();
 
                     if (inloopPred->relations.isLesser(firstLoadInLoop, valInloop)) {
-                        newGraph.setLesserEqual(valsOutloop[0], firstLoadInLoop);
-                        newGraph.setLoad(from, firstLoadInLoop);
-                        newGraph.makePlaceholder(firstLoadInLoop);
+                        newGraph.setLesserEqual(valsOutloop[0], placeholder);
+                        setSomething = true;
                     }
                     if (inloopPred->relations.isLesser(valInloop, firstLoadInLoop)) {
-                        newGraph.setLesserEqual(firstLoadInLoop, valsOutloop[0]);
-                        newGraph.setLoad(from, firstLoadInLoop);
-                        newGraph.makePlaceholder(firstLoadInLoop);
+                        newGraph.setLesserEqual(placeholder, valsOutloop[0]);
+                        setSomething = true;
+                    }
+
+                    if (setSomething) {
+                        newGraph.setLoad(from, placeholder);
+
+                        for (const llvm::Value* val : valsOutloop) {
+                            newGraph.setEqual(valsOutloop[0], val);
+                        }
+                    } else {
+                        newGraph.erasePlaceholderBucket(placeholder);
                     }
                 }
             }
         }
 
+        //std::cerr << "after first" << std::endl;
+        //newGraph.ddump();
+
         for (const llvm::Value* from : froms) {
 
             // if load was set by previous action, dont do anything anymore
-            if (newGraph.hasLoad(from)) continue;
+            //if (newGraph.hasLoad(from)) continue;
+
+            bool setSomething = false;
+            unsigned placeholder = newGraph.newPlaceholderBucket();
 
             const llvm::Value* val = nullptr;
             const RelationsGraph* predGraph = nullptr;
@@ -804,53 +825,54 @@ class RelationsAnalyzer {
 
                 val = loads[0];
                 predGraph = &pred->relations;
-            }
-            if (! val) continue;
 
-            bool setSomething = false;
-            for (auto it = predGraph->begin_lesserEqual(val);
-                      it != predGraph->end_lesserEqual(val);
-                      ++it) {
-                const llvm::Value* related; Relation relation;
-                std::tie(related, relation) = *it;
+                for (auto it = predGraph->begin_lesserEqual(val);
+                        it != predGraph->end_lesserEqual(val);
+                        ++it) {
+                    const llvm::Value* related; Relation relation;
+                    std::tie(related, relation) = *it;
 
-                if (related == val) continue;
+                    if (related == val) continue;
 
-                switch (relation) {
-                    case Relation::EQ:
-                        if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isEqual)) {
-                            newGraph.setEqual(related, val);
-                            setSomething = true;
-                        } else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual)) {
-                            newGraph.setLesserEqual(related, val);
-                            setSomething = true;
-                        }
-                        break;
-                    
-                    case Relation::LT:
-                        if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesser)) {
-                            newGraph.setLesser(related, val);
-                            setSomething = true;
-                        } else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual)) {
-                            newGraph.setLesserEqual(related, val);
-                            setSomething = true;
-                        }
-                        break;
-                    
-                    case Relation::LE:
-                        if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual)) {
-                            newGraph.setLesserEqual(related, val);
-                            setSomething = true;
-                        }
-                        break;
+                    switch (relation) {
+                        case Relation::EQ:
+                            if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isEqual)) {
+                                newGraph.setEqual(related, placeholder);
+                                setSomething = true;
+                            } else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual)) {
+                                newGraph.setLesserEqual(related, placeholder);
+                                setSomething = true;
+                            }
+                            break;
+                        
+                        case Relation::LT:
+                            if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesser)) {
+                                newGraph.setLesser(related, placeholder);
+                                setSomething = true;
+                            } else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual)) {
+                                newGraph.setLesserEqual(related, placeholder);
+                                setSomething = true;
+                            }
+                            break;
+                        
+                        case Relation::LE:
+                            if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual)) {
+                                newGraph.setLesserEqual(related, placeholder);
+                                setSomething = true;
+                            }
+                            break;
+                    }
                 }
             }
 
             if (setSomething) {
-                newGraph.setLoad(from, val);
-                newGraph.makePlaceholder(val);
+                newGraph.setLoad(from, placeholder);
+            } else {
+                newGraph.erasePlaceholderBucket(placeholder);
             }
         }
+        //std::cerr << "after after" << std::endl;
+        //newGraph.ddump();
 
         return andSwapIfChanged(location->relations, newGraph);
 
