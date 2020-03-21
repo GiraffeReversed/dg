@@ -338,6 +338,8 @@ class RelationsGraph {
 
     std::vector<std::unique_ptr<EqualityBucket>> buckets;
 	std::map<T, EqualityBucket*> mapToBucket;
+	std::map<unsigned, EqualityBucket*> placeholderBuckets;
+	unsigned lastPlaceholderId = 0;
 
 	std::map<EqualityBucket*, std::set<EqualityBucket*>> nonEqualities;
 
@@ -461,7 +463,8 @@ public:
 
 	RelationsGraph() = default;
 	
-	RelationsGraph(const RelationsGraph& other): xorRelations(other.xorRelations) {
+	RelationsGraph(const RelationsGraph& other):
+		lastPlaceholderId(other.lastPlaceholderId), xorRelations(other.xorRelations) {
 
 		std::map<EqualityBucket*, EqualityBucket*> oldToNewPtr;
 
@@ -484,6 +487,9 @@ public:
 		for (auto& pair : other.mapToBucket)
 			mapToBucket.emplace(pair.first, oldToNewPtr.at(pair.second));
 
+		for (auto& pair : other.placeholderBuckets)
+			placeholderBuckets.emplace(pair.first, oldToNewPtr.at(pair.second));
+
 		for (auto& pair : other.nonEqualities) {
 			auto returnPair = nonEqualities.emplace(oldToNewPtr.at(pair.first), pair.second);
 			substitueInSet(oldToNewPtr, returnPair.first->second);
@@ -499,6 +505,8 @@ public:
 
 		swap(first.buckets, second.buckets);
 		swap(first.mapToBucket, second.mapToBucket);
+		swap(first.placeholderBuckets, second.placeholderBuckets);
+		swap(first.lastPlaceholderId, second.lastPlaceholderId);
 		swap(first.nonEqualities, second.nonEqualities);
 		swap(first.loads, second.loads);
 		swap(first.xorRelations, second.xorRelations);
@@ -560,6 +568,7 @@ public:
 	}
 
 	void merge(const RelationsGraph& other) {
+		// DANGER fogets placeholder buckets
 		std::vector<const llvm::Value*> values = other.getAllValues();
 
 		for (auto valueIt = values.begin(); valueIt != values.end(); ++valueIt) {
@@ -616,10 +625,16 @@ public:
 		add(lt);
 		add(rt);
 
-		EqualityBucket* newBucketPtr = mapToBucket.at(lt);
-		EqualityBucket* oldBucketPtr = mapToBucket.at(rt);
+		setEqual(mapToBucket.at(lt), mapToBucket.at(rt));
+	}
 
-		setEqual(newBucketPtr, oldBucketPtr);
+	void setEqual(T lt, unsigned rt) {
+		add(lt);
+		setEqual(mapToBucket.at(lt), placeholderBuckets.at(rt));
+	}
+
+	void setEqual(unsigned lt, T rt) {
+		setEqual(rt, lt);
 	}
 	
 	void setEqual(EqualityBucket* newBucketPtr, EqualityBucket* oldBucketPtr) {
@@ -704,6 +719,13 @@ public:
 			// make successors and parents of right forget it
 			oldBucketPtr->disconnectAll();
 
+			for (auto pair : placeholderBuckets) {
+				if (pair.second == oldBucketPtr) {
+					placeholderBuckets.erase(pair.first);
+					break;
+				}
+			}
+
 			// remove right
 			eraseUniquePtr(buckets, oldBucketPtr);
 		}
@@ -755,7 +777,20 @@ public:
 			else
 				assert(0); // more buckets in between, can't decide this
 		}
+		setLesser(ltBucketPtr, rtBucketPtr);
+	}
 
+	void setLesser(T lt, unsigned rt) {
+		add(lt);
+		setLesser(mapToBucket.at(lt), placeholderBuckets.at(rt));
+	}
+
+	void setLesser(unsigned lt, T rt) {
+		add(rt);
+		setLesser(placeholderBuckets.at(lt), mapToBucket.at(rt));
+	}
+
+	void setLesser(EqualityBucket* ltBucketPtr, EqualityBucket* rtBucketPtr) {
 		rtBucketPtr->lesser.insert(ltBucketPtr);
 		ltBucketPtr->parents.insert(rtBucketPtr);
 	}
@@ -780,9 +815,20 @@ public:
 		add(lt);
 		add(rt);
 
-		EqualityBucket* ltBucketPtr = mapToBucket.at(lt);
-		EqualityBucket* rtBucketPtr = mapToBucket.at(rt);
+		setLesserEqual(mapToBucket.at(lt), mapToBucket.at(rt));
+	}
 
+	void setLesserEqual(T lt, unsigned rt) {
+		add(lt);
+		setLesserEqual(mapToBucket.at(lt), placeholderBuckets.at(rt));
+	}
+
+	void setLesserEqual(unsigned lt, T rt) {
+		add(rt);
+		setLesserEqual(placeholderBuckets.at(lt), mapToBucket.at(rt));
+	}
+
+	void setLesserEqual(EqualityBucket* ltBucketPtr, EqualityBucket* rtBucketPtr) {
 		rtBucketPtr->lesserEqual.insert(ltBucketPtr);
 		ltBucketPtr->parents.insert(rtBucketPtr);
 	}
@@ -794,9 +840,15 @@ public:
 		add(val);
 		add(from);
 
-		EqualityBucket* valBucketPtr = mapToBucket.at(val);
-		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
+		setLoad(mapToBucket.at(from), mapToBucket.at(val));
+	}
 
+	void setLoad(T from, unsigned val) {
+		add(from);
+		setLoad(mapToBucket.at(from), placeholderBuckets.at(val));
+	}
+
+	void setLoad(EqualityBucket* fromBucketPtr, EqualityBucket* valBucketPtr) {
 		// get set of values that load from equal pointers
 		EqualityBucket* valEqualBucketPtr = findByKey(loads, fromBucketPtr);
 
@@ -1114,6 +1166,22 @@ public:
 		for (T value : bucket->getEqual())
 			mapToBucket.erase(value);
 		bucket->getEqual().clear();
+	}
+
+	unsigned newPlaceholderBucket() {
+		EqualityBucket* bucket = new EqualityBucket;
+		buckets.emplace_back(bucket);
+		placeholderBuckets.emplace(++lastPlaceholderId, bucket);
+		return lastPlaceholderId;
+	}
+
+	void erasePlaceholderBucket(unsigned id) {
+		// DANGER erases placeholder bucket for good, not just
+		// the mention in placeholderBuckets
+		EqualityBucket* bucket = placeholderBuckets.at(id);
+		
+		eraseUniquePtr(buckets, bucket);
+		placeholderBuckets.erase(id);
 	}
 
 #ifndef NDEBUG
