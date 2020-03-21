@@ -184,13 +184,14 @@ class EqualityBucket {
 			if (! goDown && contains((*frame.it)->lesser, frame.bucket)) frame.relation = Relation::GT;
 
 			// plan visit to successor
-			if (! contains<const EqualityBucket*>(visited, *frame.it)) {
+			// TODO fix somehow
+			//if (! contains<const EqualityBucket*>(visited, *frame.it)) {
 				visited.insert(*frame.it);
 				if (goDown)
 					stack.emplace(Frame(*frame.it, (*frame.it)->lesserEqual.begin(), frame.relation));
 				else
 					stack.emplace(Frame(*frame.it, (*frame.it)->parents.begin(), frame.relation));
-			}
+			//}
 			return *this;
 		}
 
@@ -229,7 +230,7 @@ class EqualityBucket {
 		for (auto it = begin_down(); it != end_down(); ++it) {
 
 			if (it->bucket == needle) {
-				if (ignoreLE && it->relation != Relation::LT) return { std::stack<Frame>(), false };
+				if (ignoreLE && it->relation != Relation::LT) continue;
 				return { it.getStack(), true };
 			}
 		}
@@ -560,6 +561,74 @@ public:
 		std::set<std::pair<std::vector<T>, std::vector<T>>> rtLoads = rt.getAllLoads();
 
 		if (ltLoads != rtLoads) return false;
+
+		for (auto& pair : lt.loads) {
+			EqualityBucket* ltFromBucket = pair.first;
+			EqualityBucket* rtFromBucket = rt.mapToBucket.at(ltFromBucket->getEqual()[0]);
+
+			EqualityBucket* ltValBucket = pair.second;
+			EqualityBucket* rtValBucket = rt.loads.at(rtFromBucket);
+
+			for (auto it = ltValBucket->begin_down(); it != ltValBucket->end_down(); ++it) {
+				auto& equals = it->bucket->getEqual();
+				if (equals.empty()) continue;
+
+				EqualityBucket* rtRelatedBucket = rt.mapToBucket.at(equals[0]);
+				switch (it->relation) {
+					case Relation::EQ: if (! rt.isEqual(rtRelatedBucket, rtValBucket)) return false; break;
+					case Relation::LT: if (! rt.isLesser(rtRelatedBucket, rtValBucket)) return false; break;
+					case Relation::LE: if (! rt.isLesserEqual(rtRelatedBucket, rtValBucket)) return false; break;
+					default: assert(0 && "going down, not up");
+				}
+			}
+
+			for (auto it = ltValBucket->begin_up(); it != ltValBucket->end_up(); ++it) {
+				auto& equals = it->bucket->getEqual();
+				if (equals.empty()) continue;
+
+				EqualityBucket* rtRelatedBucket = rt.mapToBucket.at(equals[0]);
+				switch (it->relation) {
+					case Relation::EQ: break; // already been here on way down
+					case Relation::GT: if (! rt.isLesser(rtValBucket, rtRelatedBucket)) return false; break;
+					case Relation::GE: if (! rt.isLesserEqual(rtValBucket, rtRelatedBucket)) return false; break;
+					default: assert(0 && "going down, not up");
+				}
+			}
+		}
+
+		for (auto& pair : rt.loads) {
+			EqualityBucket* rtFromBucket = pair.first;
+			EqualityBucket* ltFromBucket = lt.mapToBucket.at(rtFromBucket->getEqual()[0]);
+
+			EqualityBucket* rtValBucket = pair.second;
+			EqualityBucket* ltValBucket = lt.loads.at(ltFromBucket);
+
+			for (auto it = rtValBucket->begin_down(); it != rtValBucket->end_down(); ++it) {
+				auto& equals = it->bucket->getEqual();
+				if (equals.empty()) continue;
+
+				EqualityBucket* ltRelatedBucket = lt.mapToBucket.at(equals[0]);
+				switch (it->relation) {
+					case Relation::EQ: if (! lt.isEqual(ltRelatedBucket, ltValBucket)) return false; break;
+					case Relation::LT: if (! lt.isLesser(ltRelatedBucket, ltValBucket)) return false; break;
+					case Relation::LE: if (! lt.isLesserEqual(ltRelatedBucket, ltValBucket)) return false; break;
+					default: assert(0 && "going down, not up");
+				}
+			}
+
+			for (auto it = rtValBucket->begin_up(); it != rtValBucket->end_up(); ++it) {
+				auto& equals = it->bucket->getEqual();
+				if (equals.empty()) continue;
+
+				EqualityBucket* ltRelatedBucket = lt.mapToBucket.at(equals[0]);
+				switch (it->relation) {
+					case Relation::EQ: break; // already been here on way down
+					case Relation::GT: if (! rt.isLesser(ltValBucket, ltRelatedBucket)) return false; break;
+					case Relation::GE: if (! rt.isLesserEqual(ltValBucket, ltRelatedBucket)) return false; break;
+					default: assert(0 && "going down, not up");
+				}
+			}
+		}
 
 		return lt.xorRelations == rt.xorRelations;
 	}
@@ -933,7 +1002,12 @@ public:
 		if (! areInGraph(lt, rt))
 			return false;
 
-		return mapToBucket.at(lt) == mapToBucket.at(rt);
+		return isEqual(mapToBucket.at(lt), mapToBucket.at(rt));
+	}
+
+	bool isEqual(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
+
+		return ltEqBucket == rtEqBucket;
 	}
 
 	bool isNonEqual(T lt, T rt) const {
@@ -956,7 +1030,7 @@ public:
 
 		if (inGraph(lt)) {
 			const auto& rtEqBucket = mapToBucket.at(rt);
-			if (rtEqBucket->subtreeContains(mapToBucket.at(lt), true).second)
+			if (isLesser(mapToBucket.at(lt), rtEqBucket))
 				return true;
 		}
 		
@@ -967,6 +1041,10 @@ public:
 		}
 
 		return false;
+	}
+
+	bool isLesser(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
+		return rtEqBucket->subtreeContains(ltEqBucket, true).second;
 	}
 
 	bool isLesserEqual(T lt, T rt) const {
@@ -1201,6 +1279,7 @@ public:
 
 	void printVals(std::ostream& stream, const EqualityBucket* bucket) const {
 		stream << "{ ";
+		stream.flush();
 
 		for (auto pair : placeholderBuckets) {
 			if (pair.second == bucket) stream << "placeholder " << pair.first << " ";
