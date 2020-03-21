@@ -789,10 +789,8 @@ class RelationsAnalyzer {
             }
         }
 
-        for (const llvm::Value* from : froms) {
-            std::cerr << debug::getValName(from) << std::endl;
+        for (const llvm::Value* from : froms)
             intersectByLoad(preds, from, newGraph);
-        }
 
         if (location->isJustLoopJoin()) {
             VRLocation* treePred = getTreePred(location);
@@ -813,7 +811,7 @@ class RelationsAnalyzer {
 
                     if (! isGoodFromForPlaceholder(locationsAfterInvalidating, from, fromsValues.second)) continue;
 
-                   intersectByLoad(locationsAfterInvalidating, from, newGraph);
+                    intersectByLoad(locationsAfterInvalidating, from, newGraph);
                 }
             }
         }
@@ -861,9 +859,9 @@ class RelationsAnalyzer {
 
         const llvm::Value* loaded = preds[0]->relations.getValsByPtr(from)[0];
 
-        for (auto it = preds[0]->relations.begin_lesserEqual(loaded);
-                    it != preds[0]->relations.end_lesserEqual(loaded);
-                    ++it) {
+        for (auto it = preds[0]->relations.begin_all(loaded);
+                  it != preds[0]->relations.end_all(loaded);
+                ++it) {
             const llvm::Value* related; Relation relation;
             std::tie(related, relation) = *it;
 
