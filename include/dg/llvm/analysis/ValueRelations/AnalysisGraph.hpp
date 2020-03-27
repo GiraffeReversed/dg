@@ -147,10 +147,10 @@ class AnalysisGraph {
             RelationsGraph& relations,
             const llvm::GetElementPtrInst* gep,
             uint64_t readSize) const {
-        std::cerr << "==== PROOF BEGINS =====" << std::endl;
-        std::cerr << dg::debug::getValName(gep) << std::endl << std::endl;
+        //std::cerr << "==== PROOF BEGINS =====" << std::endl;
+        //std::cerr << dg::debug::getValName(gep) << std::endl << std::endl;
 
-        relations.ddump(); // mark parameter const when deleting
+        //relations.ddump(); // mark parameter const when deleting
 
         const llvm::Value* allocCount;
         uint64_t allocElem;
@@ -169,11 +169,11 @@ class AnalysisGraph {
 
         uint64_t gepElem = getBytes(gepType);
 
-        std::cerr << "[readSize] " << readSize << std::endl;
-        std::cerr << "[allocElem] " << allocElem << std::endl;
-        std::cerr << "[gepElem] " << gepElem << std::endl;
-        std::cerr << "[allocCount] " << dg::debug::getValName(allocCount) << std::endl;
-        std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
+        //std::cerr << "[readSize] " << readSize << std::endl;
+        //std::cerr << "[allocElem] " << allocElem << std::endl;
+        //std::cerr << "[gepElem] " << gepElem << std::endl;
+        //std::cerr << "[allocCount] " << dg::debug::getValName(allocCount) << std::endl;
+        //std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
 
         // DANGER just an arbitrary type
         llvm::Type* i32 = llvm::Type::getInt32Ty(allocCount->getContext());
@@ -187,9 +187,9 @@ class AnalysisGraph {
 
         // check if index doesnt point after memory
         do {
-            std::cerr << "inloop" << std::endl;
-            std::cerr << "[allocCount] " << dg::debug::getValName(allocCount) << std::endl;
-            std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
+            //std::cerr << "inloop" << std::endl;
+            //std::cerr << "[allocCount] " << dg::debug::getValName(allocCount) << std::endl;
+            //std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
             if (relations.isLesser(gepIndex, allocCount)) {
                 // TODO handle some cases where size and max index are both constants,
                 // but type accessed is different from type allocated
@@ -233,7 +233,7 @@ public:
             RelationsGraph merged = relations;
             for (auto& equalPair : callRelation.equalPairs)
                 merged.setEqual(equalPair.first, equalPair.second);
-            merged.merge(*callRelation.callSiteRelations);
+            merged.mergeAll(*callRelation.callSiteRelations);
             merged.getCallRelations().clear();
 
             std::string result = isValidForGraph(merged, gep, readSize);

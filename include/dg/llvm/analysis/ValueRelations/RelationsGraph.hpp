@@ -377,7 +377,7 @@ private:
 					it = start->begin_down();
 				if (type == Type::UP)
 					it = start->begin_up();
-				toStrictIfNeeded();
+				toNextValidValue();
 			} else {
 				if (type == Type::DOWN)
 					it = start->end_down();
@@ -397,39 +397,31 @@ private:
 		}
 
 		value_type operator*() const {
-			if (it->relation != Relation::LE && strictOnly)
-				assert(0 && "iterator always stops at only at strict if demanded");
+			if (strictOnly && it->relation != Relation::LT && it->relation != Relation::GT)
+				assert(0 && "iterator always stops only at strict if demanded");
 			return { it->bucket->getEqual()[index], it->relation };
 		}
 
 		// make iterator always point at valid value or end
 		Iterator& operator++() {
-			if (it == start->end_up()) return *this;
-			if (it == start->end_down()) {
-				if (type != Type::ALL) return *this;
-
-				it = start->begin_up();
-				strictOnly = true; // else we would pass equal again
-				index = 0;
-				toStrictIfNeeded();
-				return *this;
-			}
+			if (it == start->end_up() || it == start->end_down()) return *this;
+			// we dont have to check if type == ALL because code later
+			// handles the jump between iterators
 
 			if (index + 1 < it->bucket->equalities.size()) {
 				++index;
 				return *this;
 			}
 
+			// else we need to move on to the next bucket
 			++it;
 			index = 0;
-			while (it != start->end_down()
-				&& it != start->end_up()
-				&& it->bucket->getEqual().empty()) ++it;
-			toStrictIfNeeded();
+			toNextValidValue();
 
 			if (it == start->end_down() && type == Type::ALL) {
-				it = start->begin_up();
-				toStrictIfNeeded();
+				// ++ so that we would not pass equal again
+				it = ++(start->begin_up());
+				toNextValidValue();
 			}
 
 			return *this;
@@ -441,14 +433,13 @@ private:
 			return preInc;
 		}
 		
-		private:
-		void toStrictIfNeeded() {
-			if (strictOnly) {
-				while (it != start->end_down()
-					&& it != start->end_up()
-					&& (it->relation != Relation::LT || it->relation != Relation::GT))
-					++it;
-			}
+	private:
+		void toNextValidValue() {
+			while (it != start->end_down()
+				&& it != start->end_up()
+				&& (it->bucket->getEqual().empty()
+					|| (strictOnly && it->relation != Relation::LT && it->relation != Relation::GT)))
+				++it;
 		}
 	};
 
@@ -461,14 +452,29 @@ private:
 	}
 
 	bool hasRelations(EqualityBucket* bucket) const {
-		return bucket->getEqual().empty()
-			|| ++begin_all(bucket->getAny()) != end_all(bucket->getAny());
+		return bucket->getEqual().size() > 1
+			|| ++bucket->begin_down() != bucket->end_down()
+			|| ++bucket->begin_up()   != bucket->end_up();
 	}
 
 	bool hasRelationsOrLoads(EqualityBucket* bucket) const {
 		return hasRelations(bucket)
 			|| findByKey(loads, bucket)
 			|| findByValue(loads, bucket);
+	}
+
+	bool setEqualInBucket(EqualityBucket* thisBucket, EqualityBucket* otherBucket) {
+		bool changed = false;
+		for (T val : otherBucket->getEqual()) {
+			auto& equals = thisBucket->getEqual();
+
+			if (std::find(equals.begin(), equals.end(), val) == equals.end()) {
+				mapToBucket.emplace(val, thisBucket);
+				equals.push_back(val);
+				changed = true;
+			}
+		}
+		return changed;
 	}
 	
 public:
@@ -530,7 +536,7 @@ public:
 		return *this;
 	}
 
-	friend bool operator==(const RelationsGraph& lt, const RelationsGraph& rt) {
+	/*friend bool operator==(const RelationsGraph& lt, const RelationsGraph& rt) {
 		if (lt.nonEqualities != rt.nonEqualities) return false;
 
 		std::vector<T> ltVals = lt.getAllValues();
@@ -643,51 +649,118 @@ public:
 		}
 
 		return lt.callRelations == rt.callRelations;
-	}
+	}*/
 
-	friend bool operator!=(const RelationsGraph& lt, const RelationsGraph& rt) {
+	/*friend bool operator!=(const RelationsGraph& lt, const RelationsGraph& rt) {
 		return ! (lt == rt);
+	}*/
+
+	bool mergeAll(const RelationsGraph& other) {
+		return mergeRelations(other) | mergeLoads(other) | mergeCallRelations(other);
 	}
 
-	void merge(const RelationsGraph& other) {
-		// DANGER fogets placeholder buckets
-		std::vector<const llvm::Value*> values = other.getAllValues();
+	bool mergeRelations(const RelationsGraph& other) {
+		bool changed = false;
+		for (auto& bucketUniquePtr : other.buckets) {
+			EqualityBucket* otherBucket = bucketUniquePtr.get();
+			//std::cerr << "other bucket" << std::endl; printVals(std::cerr, otherBucket); std::cerr << std::endl;
+			//if (! otherBucket->getEqual().empty()) {
+			//	for (auto it = other.begin_all(otherBucket->getAny()); it != other.end_all(otherBucket->getAny()); ++it)
+			//		std::cerr << "    related " << debug::getValName((*it).first) << std::endl;
+			//}
 
-		for (auto valueIt = values.begin(); valueIt != values.end(); ++valueIt) {
-            const llvm::Value* val = *valueIt;
 
-            for (auto it = other.begin_lesserEqual(val);
-                      it != other.end_lesserEqual(val);
-                      ++it) {
-                const llvm::Value* related; Relation relation;
-                std::tie(related, relation) = *it;
+			if (! other.hasRelations(otherBucket)) continue;
 
-                if (related == val) continue;
+			EqualityBucket* thisBucket = getThisBucket(other, otherBucket);
+			assert (thisBucket);
 
-				//auto found = std::find(values.begin(), values.end(), related);
-                switch (relation) {
-                    case Relation::EQ: setEqual(related, val);
+			for (auto it = otherBucket->begin_up(); it != otherBucket->end_up(); ++it) {
 
-						if (true) { // cannot initialize found directly in case
-							auto found = std::find(values.begin(), values.end(), related);
-							if (found != values.end()) {
-								values.erase(found);
-								valueIt = std::find(values.begin(), values.end(), val);
-							}
-						}
-                        break;
+				EqualityBucket* otherRelatedBucket = it->bucket;
+				EqualityBucket* thisRelatedBucket = getThisBucket(other, it->bucket);
 
-                    case Relation::LT: setLesser(related, val); break;
+				//printVals(std::cerr, otherBucket); printVals(std::cerr, otherRelatedBucket);
+				//std::cerr << std::endl;
+				//printVals(std::cerr, thisBucket); printVals(std::cerr, thisRelatedBucket);
+				//std::cerr << std::endl;
 
-                    case Relation::LE: setLesserEqual(related, val); break;
+				changed |= setEqualInBucket(thisRelatedBucket, otherRelatedBucket);
+				if (it->relation == Relation::EQ) continue; // nothing else can be done for same bucket
 
+				switch (it->relation) {
+					//case Relation::EQ: changed |= setEqual(thisBucket, thisRelatedBucket); break;
+					case Relation::GT: changed |= setLesser(thisBucket, thisRelatedBucket); break;
+					case Relation::GE: changed |= setLesserEqual(thisBucket, thisRelatedBucket); break;
 					default: assert(0 && "going down, not up");
-                }
-            }
-        }
+				}
+			}
+		}
+		return changed;
+	}
+
+	bool mergeLoads(const RelationsGraph& other, const std::set<T>& invalidated = std::set<T>()) {
+		bool changed = false;
+		for (auto& bucketUniquePtr : other.buckets) {
+			EqualityBucket* otherFromBucket = bucketUniquePtr.get();
+			if (! other.hasLoad(otherFromBucket)) continue;
+			if (! otherFromBucket->getEqual().empty() && invalidated.find(otherFromBucket->getEqual()[0]) != invalidated.end()) continue;
+
+			EqualityBucket* thisFromBucket = getThisBucket(other, otherFromBucket);
+			assert (thisFromBucket);
+
+			EqualityBucket* otherValBucket = other.loads.at(otherFromBucket);
+			EqualityBucket* thisValBucket = getThisBucket(other, otherValBucket);
+
+			if (hasLoad(thisFromBucket)) continue;
+
+			setLoad(thisFromBucket, thisValBucket);
+		}
+		return changed;
+	}
+
+	bool mergeCallRelations(const RelationsGraph& other) {
+		if (callRelations.size() != other.callRelations.size()) {
+			callRelations = other.callRelations;
+			return true;
+		}
+		return false;
+	}
+
+	EqualityBucket* getThisBucket(const RelationsGraph& other, EqualityBucket* otherBucket) {
+		if (! otherBucket->getEqual().empty()) {
+
+			for (T val : otherBucket->getEqual()) {
+				auto found = mapToBucket.find(val);
+				if (found != mapToBucket.end()) return found->second;
+			}
+
+			T val = otherBucket->getEqual()[0];
+			add(val);
+			return mapToBucket.at(val);
+		}
+
+		// else this is placeholder bucket
+		EqualityBucket* otherFromBucket = findByValue(other.loads, otherBucket);
+		assert(otherFromBucket); // if bucket is empty, it surely has to have a
+		// nonempty load bucket, they arent created under different circumstances
+
+		T from = otherFromBucket->getEqual()[0];
+		auto found = mapToBucket.find(from);
+		if (found != mapToBucket.end()) return loads.at(found->second);
+
+		const unsigned* temp = getPlaceholderBucket(from);
+		if (! temp) {
+			unsigned placeholder = newPlaceholderBucket();
+			setLoad(from, placeholder);
+			temp = getPlaceholderBucket(from);
+			assert(temp && "placeholder bucket was just added");
+		}
+		return placeholderBuckets.at(*temp);
 	}
 
 	void add(T val) {
+		assert(val);
 		if (mapToBucket.find(val) != mapToBucket.end()) return;
 
 		EqualityBucket* newBucketPtr = new EqualityBucket;
@@ -697,31 +770,31 @@ public:
 	}
 
 	// DANGER setEqual invalidates all EqualityBucket*
-	void setEqual(T lt, T rt) {
-
-		if (isEqual(lt, rt)) return;
-
-		// assert no conflicting relations
-		assert(! isNonEqual(lt, rt));
-		assert(! isLesser(lt, rt));
-		assert(! isLesser(rt, lt));
-
+	bool setEqual(T lt, T rt) {
 		add(lt);
 		add(rt);
-
-		setEqual(mapToBucket.at(lt), mapToBucket.at(rt));
+		return setEqual(mapToBucket.at(lt), mapToBucket.at(rt));
 	}
 
-	void setEqual(T lt, unsigned rt) {
+	bool setEqual(T lt, unsigned rt) {
 		add(lt);
-		setEqual(mapToBucket.at(lt), placeholderBuckets.at(rt));
+		return setEqual(mapToBucket.at(lt), placeholderBuckets.at(rt));
 	}
 
-	void setEqual(unsigned lt, T rt) {
-		setEqual(rt, lt);
+	bool setEqual(unsigned lt, T rt) {
+		add(rt);
+		return setEqual(rt, lt);
 	}
 	
-	void setEqual(EqualityBucket* newBucketPtr, EqualityBucket* oldBucketPtr) {
+	bool setEqual(EqualityBucket* newBucketPtr, EqualityBucket* oldBucketPtr) {
+
+		if (isEqual(newBucketPtr, oldBucketPtr)) return false;
+
+		// assert no conflicting relations
+		assert(! isNonEqual(newBucketPtr, oldBucketPtr));
+		assert(! isLesser(newBucketPtr, oldBucketPtr));
+		assert(! isLesser(newBucketPtr, oldBucketPtr));
+
 		std::vector<BucketPtr> toMerge;
 
 		// handle lesserEqual specializing to equal
@@ -813,11 +886,12 @@ public:
 			// remove right
 			eraseUniquePtr(buckets, oldBucketPtr);
 		}
+		return true;
 	}
 
-	void setNonEqual(T lt, T rt) {
+	bool setNonEqual(T lt, T rt) {
 
-		if (isNonEqual(lt, rt)) return;
+		if (isNonEqual(lt, rt)) return false;
 
 		add(lt);
 		add(rt);
@@ -837,102 +911,94 @@ public:
 		auto foundRt = nonEqualities.find(rtBucketPtr);
 		if (foundRt != nonEqualities.end()) foundRt->second.emplace(ltBucketPtr);
 		else nonEqualities.emplace(rtBucketPtr, std::set<EqualityBucket*>{ltBucketPtr});
+
+		return true;
 	}
 
-	void setLesser(T lt, T rt) {
+	bool setLesser(T lt, T rt) {
+		add(lt);
+		add(rt);
+		return setLesser(mapToBucket.at(lt), mapToBucket.at(rt));
+	}
 
-		if (isLesser(lt, rt)) return;
+	bool setLesser(T lt, unsigned rt) {
+		add(lt);
+		return setLesser(mapToBucket.at(lt), placeholderBuckets.at(rt));
+	}
+
+	bool setLesser(unsigned lt, T rt) {
+		add(rt);
+		return setLesser(placeholderBuckets.at(lt), mapToBucket.at(rt));
+	}
+
+	bool setLesser(EqualityBucket* ltBucketPtr, EqualityBucket* rtBucketPtr) {
+		if (isLesser(ltBucketPtr, rtBucketPtr)) return false;
 
 		// assert no conflicting relations
-		assert(! isEqual(lt, rt));
-		assert(! isLesserEqual(rt, lt));
-		assert(! isLesser(rt, lt));
+		assert(! isEqual(ltBucketPtr, rtBucketPtr));
+		assert(! isLesserEqual(rtBucketPtr, ltBucketPtr));
+		assert(! isLesser(rtBucketPtr, ltBucketPtr));
 
-		add(lt); assert(mapToBucket.find(lt) != mapToBucket.end());
-		add(rt); assert(mapToBucket.find(rt) != mapToBucket.end());
-
-		EqualityBucket* ltBucketPtr = mapToBucket.at(lt);
-		EqualityBucket* rtBucketPtr = mapToBucket.at(rt);
-
-		// handle lesserEqual specializing to lesser
-		if (isLesserEqual(lt, rt)) {
+		if (isLesserEqual(ltBucketPtr, rtBucketPtr)) {
 			if (contains<EqualityBucket*>(rtBucketPtr->lesserEqual, ltBucketPtr))
 				rtBucketPtr->lesserEqual.erase(ltBucketPtr);
 			else
 				assert(0); // more buckets in between, can't decide this
 		}
-		setLesser(ltBucketPtr, rtBucketPtr);
-	}
 
-	void setLesser(T lt, unsigned rt) {
-		add(lt);
-		setLesser(mapToBucket.at(lt), placeholderBuckets.at(rt));
-	}
-
-	void setLesser(unsigned lt, T rt) {
-		add(rt);
-		setLesser(placeholderBuckets.at(lt), mapToBucket.at(rt));
-	}
-
-	void setLesser(EqualityBucket* ltBucketPtr, EqualityBucket* rtBucketPtr) {
 		rtBucketPtr->lesser.insert(ltBucketPtr);
 		ltBucketPtr->parents.insert(rtBucketPtr);
+
+		return true;
 	}
 
-	void setLesserEqual(T lt, T rt) {
+	bool setLesserEqual(T lt, T rt) {
+		add(lt);
+		add(rt);
+		return setLesserEqual(mapToBucket.at(lt), mapToBucket.at(rt));
+	}
 
-		if (isLesserEqual(lt, rt) || isEqual(lt, rt) || isLesser(lt, rt)) return;
-		if (isNonEqual(lt, rt)) {
-			setLesser(lt, rt);
-			return;
-		}
+	bool setLesserEqual(T lt, unsigned rt) {
+		add(lt);
+		return setLesserEqual(mapToBucket.at(lt), placeholderBuckets.at(rt));
+	}
+
+	bool setLesserEqual(unsigned lt, T rt) {
+		add(rt);
+		return setLesserEqual(placeholderBuckets.at(lt), mapToBucket.at(rt));
+	}
+
+	bool setLesserEqual(EqualityBucket* ltBucketPtr, EqualityBucket* rtBucketPtr) {
+		if (isLesserEqual(ltBucketPtr, rtBucketPtr)) return false;
+		if (isNonEqual(ltBucketPtr, rtBucketPtr))
+			return setLesser(ltBucketPtr, rtBucketPtr);
 
 		// assert no conflicting relations
-		assert(! isLesser(rt, lt));
+		assert(! isLesser(rtBucketPtr, ltBucketPtr));
 
 		// infer values being equal
-		if (isLesserEqual(rt, lt)) {
-			setEqual(lt, rt);
-			return;
-		}
+		if (isLesserEqual(rtBucketPtr, ltBucketPtr))
+			return setEqual(ltBucketPtr, rtBucketPtr);
 
-		add(lt);
-		add(rt);
-
-		setLesserEqual(mapToBucket.at(lt), mapToBucket.at(rt));
-	}
-
-	void setLesserEqual(T lt, unsigned rt) {
-		add(lt);
-		setLesserEqual(mapToBucket.at(lt), placeholderBuckets.at(rt));
-	}
-
-	void setLesserEqual(unsigned lt, T rt) {
-		add(rt);
-		setLesserEqual(placeholderBuckets.at(lt), mapToBucket.at(rt));
-	}
-
-	void setLesserEqual(EqualityBucket* ltBucketPtr, EqualityBucket* rtBucketPtr) {
 		rtBucketPtr->lesserEqual.insert(ltBucketPtr);
 		ltBucketPtr->parents.insert(rtBucketPtr);
+		return true;
 	}
 
-	void setLoad(T from, T val) {
-
-		if (isLoad(from, val)) return;
-
+	bool setLoad(T from, T val) {
 		add(val);
 		add(from);
-
-		setLoad(mapToBucket.at(from), mapToBucket.at(val));
+		return setLoad(mapToBucket.at(from), mapToBucket.at(val));
 	}
 
-	void setLoad(T from, unsigned val) {
+	bool setLoad(T from, unsigned val) {
 		add(from);
-		setLoad(mapToBucket.at(from), placeholderBuckets.at(val));
+		return setLoad(mapToBucket.at(from), placeholderBuckets.at(val));
 	}
 
-	void setLoad(EqualityBucket* fromBucketPtr, EqualityBucket* valBucketPtr) {
+	bool setLoad(EqualityBucket* fromBucketPtr, EqualityBucket* valBucketPtr) {
+		if (isLoad(fromBucketPtr, valBucketPtr)) return false;
+
 		// get set of values that load from equal pointers
 		EqualityBucket* valEqualBucketPtr = findByKey(loads, fromBucketPtr);
 
@@ -944,14 +1010,15 @@ public:
 		}
 		// TODO can there be a situation, in which the fact, that i can load
 		// same value from different pointer, means that the pointers are equal?
+		return true;
 	}
 
-	void unsetAllLoadsByPtr(T from) {
-		if (! inGraph(from)) return;
+	bool unsetAllLoadsByPtr(T from) {
+		if (! inGraph(from)) return false;
 
 		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
 		EqualityBucket* valBucketPtr = findByKey(loads, fromBucketPtr);
-		if (! valBucketPtr) return; // from doesn't load anything
+		if (! valBucketPtr) return false; // from doesn't load anything
 
 		loads.erase(fromBucketPtr);
 
@@ -966,6 +1033,7 @@ public:
 			mapToBucket.erase(from);
 			eraseUniquePtr(buckets, fromBucketPtr);
 		}
+		return true;
 	}
 
 	void unsetAllLoads() {
@@ -1027,9 +1095,10 @@ public:
 		if (! areInGraph(lt, rt))
 			return false;
 
-		const auto& ltEqBucket = mapToBucket.at(lt);
-		const auto& rtEqBucket = mapToBucket.at(rt);
+		return isNonEqual(mapToBucket.at(lt), mapToBucket.at(rt));
+	}
 
+	bool isNonEqual(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
 		auto found = nonEqualities.find(ltEqBucket);
 		if (found == nonEqualities.end()) return false;
 
@@ -1056,7 +1125,18 @@ public:
 	}
 
 	bool isLesser(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
-		return rtEqBucket->subtreeContains(ltEqBucket, true).second;
+		if (rtEqBucket->subtreeContains(ltEqBucket, true).second) return true;
+
+		const llvm::ConstantInt* constLt = nullptr;
+		for (const llvm::Value* val : ltEqBucket->getEqual()) {
+			if (auto constant = llvm::dyn_cast<llvm::ConstantInt>(val))
+				constLt = constant;
+		}
+
+		if (! constLt) return false;
+
+		const llvm::ConstantInt* constBound = getLesserEqualConstant(rtEqBucket);
+		return constBound && constLt->getValue().slt(constBound->getValue());
 	}
 
 	bool isLesserEqual(T lt, T rt) const {
@@ -1078,17 +1158,29 @@ public:
 	}
 
 	bool isLesserEqual(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
-		return rtEqBucket->subtreeContains(ltEqBucket, false).second;
+		if (rtEqBucket->subtreeContains(ltEqBucket, false).second) return true;
+
+		const llvm::ConstantInt* constLt = nullptr;
+		for (const llvm::Value* val : ltEqBucket->getEqual()) {
+			if (auto constant = llvm::dyn_cast<llvm::ConstantInt>(val))
+				constLt = constant;
+		}
+
+		if (! constLt) return false;
+
+		const llvm::ConstantInt* constBound = getLesserEqualConstant(rtEqBucket);
+		return constBound && constLt->getValue().sle(constBound->getValue());
 	}
 
 	bool isLoad(T from, T val) const {
 		
 		if (! areInGraph(val, from))
 			return false;
+	
+		return isLoad(mapToBucket.at(from), mapToBucket.at(val));
+	}
 
-		EqualityBucket* valBucketPtr = mapToBucket.at(val);
-		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
-
+	bool isLoad(EqualityBucket* fromBucketPtr, EqualityBucket* valBucketPtr) const {
 		auto found = loads.find(fromBucketPtr);
 		return found != loads.end() && valBucketPtr == found->second;
 	}
@@ -1096,9 +1188,11 @@ public:
 	bool hasLoad(T from) const {
 		if (! inGraph(from)) return false;
 
-		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
+		return hasLoad(mapToBucket.at(from));
+	}
 
-		return loads.find(fromBucketPtr) != loads.end(); 
+	bool hasLoad(EqualityBucket* fromBucketPtr) const {
+		return loads.find(fromBucketPtr) != loads.end();
 	}
 
 	std::vector<T> getEqual(T val) const {
@@ -1192,11 +1286,19 @@ public:
 
 	const llvm::ConstantInt* getLesserEqualConstant(T val) const {
 
+		if (! inGraph(val)) return nullptr;
+		return getLesserEqualConstant(mapToBucket.at(val));
+	}
+
+	const llvm::ConstantInt* getLesserEqualConstant(EqualityBucket* bucket) const {
+
 		const llvm::ConstantInt* highest = nullptr;
-		for (auto it = begin_lesserEqual(val); it != end_lesserEqual(val); ++it) {
-			if (auto constant = llvm::dyn_cast<llvm::ConstantInt>((*it).first)) {
-				if (! highest || constant->getValue().sgt(highest->getValue()))
-					highest = constant;
+		for (auto it = bucket->begin_down(); it != bucket->end_down(); ++it) {
+			for (const llvm::Value* val : it->bucket->getEqual()) {
+				if (auto constant = llvm::dyn_cast<llvm::ConstantInt>(val)) {
+					if (! highest || constant->getValue().sgt(highest->getValue()))
+						highest = constant;
+				}
 			}
 		}
 		return highest;
@@ -1265,6 +1367,17 @@ public:
 		buckets.emplace_back(bucket);
 		placeholderBuckets.emplace(++lastPlaceholderId, bucket);
 		return lastPlaceholderId;
+	}
+
+	const unsigned* getPlaceholderBucket(T from) const {
+		if (! hasLoad(from)) return nullptr;
+
+		EqualityBucket* fromBucketPtr = mapToBucket.at(from);
+		EqualityBucket* valBucketPtr = loads.at(fromBucketPtr);
+
+		for (auto& pair : placeholderBuckets)
+			if (pair.second == valBucketPtr) return &pair.first;
+		return nullptr;
 	}
 
 	void erasePlaceholderBucket(unsigned id) {
@@ -1385,8 +1498,8 @@ public:
 		for (auto& callRelation : callRelations) {
 			stream << std::endl << "    XOR relations" << std::endl;
 			for (auto& equalPair : callRelation.equalPairs)
-				stream << "{ " << debug::getValName(equalPair.first) << "; "
-							   << debug::getValName(equalPair.second)
+				stream << "{ " << strip(debug::getValName(equalPair.first)) << "; "
+							   << strip(debug::getValName(equalPair.second))
 					   << " }" << std::endl;
 			callRelation.callSiteRelations->generalDump(stream);
 		}

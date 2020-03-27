@@ -55,26 +55,39 @@ class RelationsAnalyzer {
         if (! target) return false;
         assert(source && target && op);
 
-        RelationsGraph newGraph = source->relations;
+        RelationsGraph& newGraph = target->relations;
+
+        bool changed = false;
+        changed |= newGraph.mergeRelations(source->relations);
+        changed |= newGraph.mergeCallRelations(source->relations);
+        std::cerr << "after dump" << std::endl;
+        newGraph.ddump();
 
         if (op->isInstruction()) {
             const llvm::Instruction* inst = static_cast<VRInstruction *>(op)->getInstruction();
-            forgetInvalidated(newGraph, inst);
-            processInstruction(newGraph, inst);
-        } else if (op->isAssume()) { 
-            if (op->isAssumeBool())
-                processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op));
-            else // isAssumeEqual
-                processAssumeEqual(newGraph, static_cast<VRAssumeEqual *>(op));
-        } // else op is noop
+            changed |= newGraph.mergeLoads(source->relations, instructionInvalidates(source->relations, inst));
+            changed |= processInstruction(newGraph, inst);
 
-        return andSwapIfChanged(target->relations, newGraph);
+        } else if (op->isAssume()) {
+            if (op->isAssumeBool())
+                changed |= processAssumeBool(newGraph, static_cast<VRAssumeBool *>(op));
+            else // isAssumeEqual
+                changed |= processAssumeEqual(newGraph, static_cast<VRAssumeEqual *>(op));
+            changed |= newGraph.mergeLoads(source->relations); // we have to manage phi before loads
+
+        } else  // op is noop
+            changed |= newGraph.mergeLoads(source->relations);
+
+        //swap(newGraph, target->relations);
+        return changed;
     }
 
-    void forgetInvalidated(RelationsGraph& graph, const llvm::Instruction* inst) const {
-
+    bool forgetInvalidated(RelationsGraph& graph, const llvm::Instruction* inst) const {
+        bool changed = false;
         for (const llvm::Value* invalid : instructionInvalidates(graph, inst))
-            graph.unsetAllLoadsByPtr(invalid);
+            changed |= graph.unsetAllLoadsByPtr(invalid);
+
+        return changed;
     }
 
     std::set<const llvm::Value*>
@@ -161,43 +174,47 @@ class RelationsAnalyzer {
         return false;
     }
 
-    void storeGen(RelationsGraph& graph, const llvm::StoreInst* store) {
-        graph.setLoad(store->getPointerOperand()->stripPointerCasts(), store->getValueOperand());
+    bool storeGen(RelationsGraph& graph, const llvm::StoreInst* store) {
+        return graph.setLoad(store->getPointerOperand()->stripPointerCasts(), store->getValueOperand());
     }
 
-    void loadGen(RelationsGraph& graph, const llvm::LoadInst* load) {
-        graph.setLoad(load->getPointerOperand()->stripPointerCasts(), load);
+    bool loadGen(RelationsGraph& graph, const llvm::LoadInst* load) {
+        return graph.setLoad(load->getPointerOperand()->stripPointerCasts(), load);
     }
 
-    void gepGen(RelationsGraph& graph, const llvm::GetElementPtrInst* gep) {
+    bool gepGen(RelationsGraph& graph, const llvm::GetElementPtrInst* gep) {
+        bool changed = false;
         if (gep->hasAllZeroIndices())
-            graph.setEqual(gep, gep->getPointerOperand());
+            changed |= graph.setEqual(gep, gep->getPointerOperand());
 
         for (auto& fromsValues : graph.getAllLoads()) {
             for (const llvm::Value* from : fromsValues.first) {
                 if (auto otherGep = llvm::dyn_cast<llvm::GetElementPtrInst>(from)) {
                     if (operandsEqual(graph, gep, otherGep, true))
-                        graph.setEqual(gep, otherGep);
+                        changed |= graph.setEqual(gep, otherGep);
                 }
             }
         }
         // TODO something more?
         // indices method gives iterator over indices
+        return changed;
     }
 
-    void extGen(RelationsGraph& graph, const llvm::CastInst* ext) {
-        graph.setEqual(ext, ext->getOperand(0));
+    bool extGen(RelationsGraph& graph, const llvm::CastInst* ext) {
+        return graph.setEqual(ext, ext->getOperand(0));
     }
 
-    void addGen(RelationsGraph& graph, const llvm::BinaryOperator* add) {
+    bool addGen(RelationsGraph& graph, const llvm::BinaryOperator* add) {
         auto c1 = llvm::dyn_cast<llvm::ConstantInt>(add->getOperand(0));
         auto c2 = llvm::dyn_cast<llvm::ConstantInt>(add->getOperand(1));
         // TODO check wheter equal to constant
 
-        solveEquality(graph, add);
-        solveCommutativity(graph, add);
+        bool changed = false;
+        changed |= solveEquality(graph, add);
+        changed |= solveCommutativity(graph, add);
 
-        if (solvesSameType(graph, c1, c2, add)) return;
+        if ((c1 && c2) || (! c1 && ! c2))
+            return changed | solvesSameType(graph, c1, c2, add);
 
         const llvm::Value* param = nullptr;
         if (c2) { c1 = c2; param = add->getOperand(0); }
@@ -205,65 +222,72 @@ class RelationsAnalyzer {
 
         assert(c1 && add && param);
         // add = param + c1
-        if (c1->isZero()) return graph.setEqual(add, param);
+        if (c1->isZero()) return changed | graph.setEqual(add, param);
         
         else if (c1->isNegative()) {
             // c1 < 0  ==>  param + c1 < param
-            graph.setLesser(add, param);
+            changed |= graph.setLesser(add, param);
 
             // lesser < param  ==>  lesser <= param + (-1)
-            if (c1->isMinusOne()) solvesDiffOne(graph, param, add, true);
+            if (c1->isMinusOne())
+                changed |= solvesDiffOne(graph, param, add, true);
 
         } else {
             // c1 > 0 => param < param + c1
-            graph.setLesser(param, add);
+            changed |= graph.setLesser(param, add);
 
             // param < greater => param + 1 <= greater
-            if (c1->isOne()) solvesDiffOne(graph, param, add, false);
+            if (c1->isOne())
+                changed |= solvesDiffOne(graph, param, add, false);
         }
 
         const llvm::ConstantInt* constBound = graph.getLesserEqualConstant(param);
         if (constBound) {
             const llvm::APInt& boundResult = constBound->getValue() + c2->getValue();
             const llvm::Constant* llvmResult = llvm::ConstantInt::get(add->getType(), boundResult);
-            if (graph.isLesser(constBound, param)) graph.setLesser(llvmResult, add);
-            else if (graph.isEqual(constBound, param)) graph.setEqual(llvmResult, add);
-            else graph.setLesserEqual(llvmResult, add);
+            if (graph.isLesser(constBound, param)) changed |= graph.setLesser(llvmResult, add);
+            else if (graph.isEqual(constBound, param)) changed |= graph.setEqual(llvmResult, add);
+            else changed |= graph.setLesserEqual(llvmResult, add);
         }
+        return changed;
     }
 
-    void subGen(RelationsGraph& graph, const llvm::BinaryOperator* sub) {
+    bool subGen(RelationsGraph& graph, const llvm::BinaryOperator* sub) {
         auto c1 = llvm::dyn_cast<llvm::ConstantInt>(sub->getOperand(0));
         auto c2 = llvm::dyn_cast<llvm::ConstantInt>(sub->getOperand(1));
         // TODO check wheter equal to constant
 
-        solveEquality(graph, sub);
+        bool changed = false;
+        changed |= solveEquality(graph, sub);
 
-        if (solvesSameType(graph, c1, c2, sub)) return;
+        if ((c1 && c2) || (! c1 && ! c2))
+            return changed | solvesSameType(graph, c1, c2, sub);
 
         if (c1) {
             // TODO collect something here?
-            return;
+            return changed;
         }
 
         const llvm::Value* param = sub->getOperand(0);
         assert(c2 && sub && param);
         // sub = param - c1
-        if (c2->isZero()) return graph.setEqual(sub, param);
+        if (c2->isZero()) return changed | graph.setEqual(sub, param);
         
         else if (c2->isNegative()) {
             // c1 < 0  ==>  param < param - c1
-            graph.setLesser(param, sub);
+            changed |= graph.setLesser(param, sub);
 
             // param < greater ==> param - (-1) <= greater
-            if (c2->isMinusOne()) solvesDiffOne(graph, param, sub, false);
+            if (c2->isMinusOne())
+                changed |= solvesDiffOne(graph, param, sub, false);
 
         } else {
             // c1 > 0 => param - c1 < param
-            graph.setLesser(sub, param);
+            changed |= graph.setLesser(sub, param);
 
             // lesser < param  ==>  lesser <= param - 1
-            if (c2->isOne()) solvesDiffOne(graph, param, sub, true);
+            if (c2->isOne())
+                changed |= solvesDiffOne(graph, param, sub, true);
         }
 
         const llvm::ConstantInt* constBound = graph.getLesserEqualConstant(param);
@@ -271,21 +295,24 @@ class RelationsAnalyzer {
             const llvm::APInt& boundResult = constBound->getValue() - c2->getValue();
             const llvm::Constant* llvmResult = llvm::ConstantInt::get(sub->getType(), boundResult);
             
-            if (graph.isLesser(constBound, param)) graph.setLesser(llvmResult, sub);
-            else if (graph.isEqual(constBound, param)) graph.setEqual(llvmResult, sub);
-            else graph.setLesserEqual(llvmResult, sub);
+            if (graph.isLesser(constBound, param)) changed |= graph.setLesser(llvmResult, sub);
+            else if (graph.isEqual(constBound, param)) changed |= graph.setEqual(llvmResult, sub);
+            else changed |= graph.setLesserEqual(llvmResult, sub);
         }
+        return changed;
     }
 
-    void mulGen(RelationsGraph& graph, const llvm::BinaryOperator* mul) {
+    bool mulGen(RelationsGraph& graph, const llvm::BinaryOperator* mul) {
         auto c1 = llvm::dyn_cast<llvm::ConstantInt>(mul->getOperand(0));
         auto c2 = llvm::dyn_cast<llvm::ConstantInt>(mul->getOperand(1));
         // TODO check wheter equal to constant
 
-        solveEquality(graph, mul);
-        solveCommutativity(graph, mul);
+        bool changed = false;
+        changed |= solveEquality(graph, mul);
+        changed |= solveCommutativity(graph, mul);
 
-        if (solvesSameType(graph, c1, c2, mul)) return;
+        if ((c1 && c2) || (! c1 && ! c2))
+            return changed | solvesSameType(graph, c1, c2, mul);
 
         const llvm::Value* param = nullptr;
         if (c2) { c1 = c2; param = mul->getOperand(0); }
@@ -293,10 +320,11 @@ class RelationsAnalyzer {
 
         assert(c1 && mul && param);
         // mul = param + c1
-        if (c1->isZero()) return graph.setEqual(mul, c1);
-        else if (c1->isOne()) return graph.setEqual(mul, param);
+        if (c1->isZero()) changed |= graph.setEqual(mul, c1);
+        else if (c1->isOne()) changed |= graph.setEqual(mul, param);
 
         // TODO collect something here?
+        return changed;
     }
 
     bool solvesSameType(RelationsGraph& graph,
@@ -315,10 +343,10 @@ class RelationsAnalyzer {
                 default:
                     assert(0 && "solvesSameType: shouldn't handle any other operation");
             }
-            graph.setEqual(op, llvm::ConstantInt::get(c1->getType(), result));
-            return true;
+            return graph.setEqual(op, llvm::ConstantInt::get(c1->getType(), result));
         }
 
+        // else ! c1 && ! c2
         llvm::Type* i32 = llvm::Type::getInt32Ty(op->getContext());
         const llvm::Constant* one = llvm::ConstantInt::getSigned(i32, 1);
         const llvm::Constant* minusOne = llvm::ConstantInt::getSigned(i32, -1);
@@ -326,27 +354,25 @@ class RelationsAnalyzer {
         const llvm::Value* fst = op->getOperand(0);
         const llvm::Value* snd = op->getOperand(1);
 
-        if (! c1 && ! c2) {
-            switch (op->getOpcode()) {
-                case llvm::Instruction::Add:
-                    if (graph.isLesserEqual(one, fst)) graph.setLesser(snd, op);
-                    if (graph.isLesserEqual(one, snd)) graph.setLesser(fst, op);
-                    if (graph.isLesserEqual(fst, minusOne)) graph.setLesser(op, snd);
-                    if (graph.isLesserEqual(snd, minusOne)) graph.setLesser(op, fst);
-                    break;
-                case llvm::Instruction::Sub:
-                    if (graph.isLesserEqual(one, snd)) graph.setLesser(op, fst);
-                    if (graph.isLesserEqual(snd, minusOne)) graph.setLesser(fst, op);
-                    break;
-                default:
-                    break;
-            }
-            return true;
+        bool changed = false;
+        switch (op->getOpcode()) {
+            case llvm::Instruction::Add:
+                if (graph.isLesserEqual(one, fst)) changed |= graph.setLesser(snd, op);
+                if (graph.isLesserEqual(one, snd)) changed |= graph.setLesser(fst, op);
+                if (graph.isLesserEqual(fst, minusOne)) changed |= graph.setLesser(op, snd);
+                if (graph.isLesserEqual(snd, minusOne)) changed |= graph.setLesser(op, fst);
+                break;
+            case llvm::Instruction::Sub:
+                if (graph.isLesserEqual(one, snd)) changed |= graph.setLesser(op, fst);
+                if (graph.isLesserEqual(snd, minusOne)) changed |= graph.setLesser(fst, op);
+                break;
+            default:
+                break;
         }
-        return false;
+        return changed;
     }
 
-    void solvesDiffOne(RelationsGraph& graph,
+    bool solvesDiffOne(RelationsGraph& graph,
                        const llvm::Value* param,
                        const llvm::BinaryOperator* op,
                        bool getLesser) {
@@ -354,9 +380,11 @@ class RelationsAnalyzer {
         std::vector<const llvm::Value*> sample = getLesser ?
                     graph.getSampleLesser(param) : graph.getSampleGreater(param);
 
+        bool changed = false;
         for (const llvm::Value* value : sample)
-            if (getLesser) graph.setLesserEqual(value, op);
-            else           graph.setLesserEqual(op, value);
+            if (getLesser) changed |= graph.setLesserEqual(value, op);
+            else           changed |= graph.setLesserEqual(op, value);
+        return changed;
     }
 
     bool operandsEqual(RelationsGraph& graph,
@@ -374,39 +402,44 @@ class RelationsAnalyzer {
         return true;
     }
 
-    void solveByOperands(RelationsGraph& graph, const llvm::BinaryOperator* operation, bool sameOrder) {
+    bool solveByOperands(RelationsGraph& graph, const llvm::BinaryOperator* operation, bool sameOrder) {
+        bool changed = false;
         for (auto same : structure.getInstructionSetFor(operation->getOpcode())) {
             auto sameOperation = llvm::dyn_cast<const llvm::BinaryOperator>(same);
 
             if (operandsEqual(graph, operation, sameOperation, sameOrder))
-                graph.setEqual(operation, sameOperation);
+                changed |= graph.setEqual(operation, sameOperation);
         }
+        return changed;
     }
 
-    void solveEquality(RelationsGraph& graph, const llvm::BinaryOperator* operation) {
-        solveByOperands(graph, operation, true);
+    bool solveEquality(RelationsGraph& graph, const llvm::BinaryOperator* operation) {
+        return solveByOperands(graph, operation, true);
     }
 
-    void solveCommutativity(RelationsGraph& graph, const llvm::BinaryOperator* operation) {
-        solveByOperands(graph, operation, false);
+    bool solveCommutativity(RelationsGraph& graph, const llvm::BinaryOperator* operation) {
+        return solveByOperands(graph, operation, false);
     }
 
-    void remGen(RelationsGraph& graph, const llvm::BinaryOperator* rem) {
+    bool remGen(RelationsGraph& graph, const llvm::BinaryOperator* rem) {
         assert(rem);
         const llvm::Constant* zero = llvm::ConstantInt::getSigned(rem->getType(), 0);
 
-        if (! graph.isLesserEqual(zero, rem->getOperand(0))) return;
+        if (! graph.isLesserEqual(zero, rem->getOperand(0))) return false;
 
-        graph.setLesserEqual(zero, rem);
-        graph.setLesser(rem, rem->getOperand(1));
+        bool changed = false; 
+        changed |= graph.setLesserEqual(zero, rem);
+        changed |= graph.setLesser(rem, rem->getOperand(1));
+        return changed;
     }
 
-    void castGen(RelationsGraph& graph, const llvm::CastInst* cast) {
+    bool castGen(RelationsGraph& graph, const llvm::CastInst* cast) {
         if (cast->isLosslessCast() || cast->isNoopCast(module.getDataLayout()))
-            graph.setEqual(cast, cast->getOperand(0));
+            return graph.setEqual(cast, cast->getOperand(0));
+        return false;
     }
 
-    void processInstruction(RelationsGraph& graph, const llvm::Instruction* inst) {
+    bool processInstruction(RelationsGraph& graph, const llvm::Instruction* inst) {
         switch(inst->getOpcode()) {
             case llvm::Instruction::Store:
                 return storeGen(graph, llvm::dyn_cast<llvm::StoreInst>(inst));
@@ -431,16 +464,18 @@ class RelationsAnalyzer {
                     return castGen(graph, cast);
                 }
         }
+        return false;
     } 
 
-    void processAssumeBool(RelationsGraph& newGraph, VRAssumeBool* assume) const {
+    bool processAssumeBool(RelationsGraph& newGraph, VRAssumeBool* assume) const {
         if (llvm::isa<llvm::ICmpInst>(assume->getValue()))
-            processICMP(newGraph, assume);
+            return processICMP(newGraph, assume);
         if (llvm::isa<llvm::PHINode>(assume->getValue()))
-            processPhi(newGraph, assume);
+            return processPhi(newGraph, assume);
+        return false;
     }
 
-    void processICMP(RelationsGraph& newGraph, VRAssumeBool* assume) const {
+    bool processICMP(RelationsGraph& newGraph, VRAssumeBool* assume) const {
         const llvm::ICmpInst* icmp = llvm::cast<llvm::ICmpInst>(assume->getValue());
         bool assumption = assume->getAssumption();
 
@@ -452,26 +487,26 @@ class RelationsAnalyzer {
 
         switch (pred) {
             case llvm::ICmpInst::Predicate::ICMP_EQ:
-                newGraph.setEqual(op1, op2); break;
+                return newGraph.setEqual(op1, op2);
 
             case llvm::ICmpInst::Predicate::ICMP_NE:
-                newGraph.setNonEqual(op1, op2); break;
+                return newGraph.setNonEqual(op1, op2);
 
             case llvm::ICmpInst::Predicate::ICMP_ULE:
             case llvm::ICmpInst::Predicate::ICMP_SLE:
-                newGraph.setLesserEqual(op1, op2); break;
+                return newGraph.setLesserEqual(op1, op2);
 
             case llvm::ICmpInst::Predicate::ICMP_ULT:
             case llvm::ICmpInst::Predicate::ICMP_SLT:
-                newGraph.setLesser(op1, op2); break;
+                return newGraph.setLesser(op1, op2);
 
             case llvm::ICmpInst::Predicate::ICMP_UGE:
             case llvm::ICmpInst::Predicate::ICMP_SGE:
-                newGraph.setLesserEqual(op2, op1); break;
+                return newGraph.setLesserEqual(op2, op1);
 
             case llvm::ICmpInst::Predicate::ICMP_UGT:
             case llvm::ICmpInst::Predicate::ICMP_SGT:
-                newGraph.setLesser(op2, op1); break;
+                return newGraph.setLesser(op2, op1);
 
             default:
         #ifndef NDEBUG
@@ -481,7 +516,7 @@ class RelationsAnalyzer {
         }
     }
 
-    void processPhi(RelationsGraph& newGraph, VRAssumeBool* assume) const {
+    bool processPhi(RelationsGraph& newGraph, VRAssumeBool* assume) const {
         const llvm::PHINode* phi = llvm::cast<llvm::PHINode>(assume->getValue());
         bool assumption = assume->getAssumption();
 
@@ -493,20 +528,20 @@ class RelationsAnalyzer {
                     && ((constResult->isOne() && assumption)
                     || (constResult->isZero() && ! assumption)))) {
                 if (! assumedPred) assumedPred = phi->getIncomingBlock(i);
-                else return; // we found other viable incoming block
+                else return false; // we found other viable incoming block
             }
         }
         assert (assumedPred);
 
         VRBBlock* vrbblock = blockMapping.at(assumedPred).get();
         VRLocation* source = vrbblock->last();
-        newGraph.merge(source->relations);
+        return newGraph.mergeAll(source->relations);
     }
 
-    void processAssumeEqual(RelationsGraph& newGraph, VRAssumeEqual* assume) const {
+    bool processAssumeEqual(RelationsGraph& newGraph, VRAssumeEqual* assume) const {
         const llvm::Value* val1 = assume->getValue();
         const llvm::Value* val2 = assume->getAssumption();
-        newGraph.setEqual(val1, val2);
+        return newGraph.setEqual(val1, val2);
     }
 
     bool relatesInAll(const std::vector<VRLocation*>& locations,
@@ -544,10 +579,11 @@ class RelationsAnalyzer {
     bool mergeRelations(const std::vector<VRLocation*>& preds, VRLocation* location) {
         if (preds.empty()) return false;
 
-        RelationsGraph newGraph = location->relations;
+        RelationsGraph& newGraph = location->relations;
         RelationsGraph& oldGraph = preds[0]->relations;
         std::vector<const llvm::Value*> values = oldGraph.getAllValues();
 
+        bool changed = false;
         // merge from all predecessors
         for (auto valueIt = values.begin(); valueIt != values.end(); ++valueIt) {
             const llvm::Value* val = *valueIt;
@@ -563,7 +599,7 @@ class RelationsAnalyzer {
                 switch (relation) {
                     case Relation::EQ:
                         if (relatesInAll(preds, related, val, &RelationsGraph::isEqual)) {
-                            newGraph.setEqual(related, val);
+                            changed |= newGraph.setEqual(related, val);
 
                             auto found = std::find(values.begin(), values.end(), related);
                             if (found != values.end()) {
@@ -575,12 +611,12 @@ class RelationsAnalyzer {
 
                     case Relation::LT:
                         if (relatesInAll(preds, related, val, &RelationsGraph::isLesser))
-                            newGraph.setLesser(related, val);
+                            changed |= newGraph.setLesser(related, val);
                         break;
 
                     case Relation::LE:
                         if (relatesInAll(preds, related, val, &RelationsGraph::isLesserEqual))
-                            newGraph.setLesserEqual(related, val);
+                            changed |= newGraph.setLesserEqual(related, val);
                         break;
 
                     default: assert(0 && "going down, not up");
@@ -593,12 +629,12 @@ class RelationsAnalyzer {
         const RelationsGraph& treePredGraph = treePred->relations;
 
         if (location->isJustLoopJoin())
-            newGraph.merge(treePredGraph);
+            changed |= newGraph.mergeRelations(treePredGraph);
 
         // simply pass xor relations over tree edge
         newGraph.getCallRelations() = treePredGraph.getCallRelations();
 
-        return andSwapIfChanged(location->relations, newGraph);
+        return changed;
     }
 
     bool loadsInAll(const std::vector<VRLocation*>& locations, const llvm::Value* from, const llvm::Value* value) const {
@@ -625,15 +661,17 @@ class RelationsAnalyzer {
     bool mergeLoads(const std::vector<VRLocation*>& preds, VRLocation* location) {
         if (preds.empty()) return false;
 
-        RelationsGraph newGraph = location->relations;
+        RelationsGraph& newGraph = location->relations;
         const auto& loadBucketPairs = preds[0]->relations.getAllLoads();
+
+        bool changed = false;
 
         // merge loads from all predecessors
         for (const auto& fromsValues : loadBucketPairs) {
             for (const llvm::Value* from : fromsValues.first) {
                 for (const llvm::Value* val : fromsValues.second) {
                     if (loadsInAll(preds, from, val))
-                        newGraph.setLoad(from, val);
+                        changed |= newGraph.setLoad(from, val);
                 }
             }
         }
@@ -644,7 +682,7 @@ class RelationsAnalyzer {
 
             std::set<const llvm::Value*> allInvalid;
 
-            for (VRLocation* pred : preds) {
+            for (VRLocation* pred : preds) { // TODO unnecessary to do for all preds
                 RelationsGraph& graph = pred->relations;
 
                 for (const auto* inst : structure.getInloopValues(location)) {
@@ -660,14 +698,14 @@ class RelationsAnalyzer {
                 if (! anyInvalidated(allInvalid, fromsValues.first)) {
                     for (auto from : fromsValues.first) {
                         for (auto val : fromsValues.second) {
-                            newGraph.setLoad(from, val);
+                            changed |= newGraph.setLoad(from, val);
                         }
                     }
                 }
             }
         }
 
-        return andSwapIfChanged(location->relations, newGraph);
+        return changed;
     }
 
     VRLocation* getTreePred(VRLocation* location) const {
@@ -707,7 +745,7 @@ class RelationsAnalyzer {
     }
 
     bool mergeRelationsByLoads(const std::vector<VRLocation*>& preds, VRLocation* location) {
-        RelationsGraph newGraph = location->relations;
+        RelationsGraph& newGraph = location->relations;
 
         std::vector<const llvm::Value*> froms;
         for (auto fromsValues : preds[0]->relations.getAllLoads()) {
@@ -716,6 +754,8 @@ class RelationsAnalyzer {
                     froms.emplace_back(from);
             }
         }
+
+        bool changed = false;
 
         // infer some invariants in loop
         if (preds.size() == 2 && location->isJustLoopJoin()) {
@@ -765,32 +805,32 @@ class RelationsAnalyzer {
                     if (valsOutloop.empty()) continue;
 
                     bool setSomething = false;
-                    unsigned placeholder = newGraph.newPlaceholderBucket();
+                    const unsigned* temp = newGraph.getPlaceholderBucket(from);
+                    unsigned placeholder = temp ? *temp : newGraph.newPlaceholderBucket();
+                    bool newPlaceholder = temp == nullptr;
 
-                    if (inloopPred->relations.isLesser(firstLoadInLoop, valInloop)) {
-                        newGraph.setLesserEqual(valsOutloop[0], placeholder);
-                        setSomething = true;
-                    }
-                    if (inloopPred->relations.isLesser(valInloop, firstLoadInLoop)) {
-                        newGraph.setLesserEqual(placeholder, valsOutloop[0]);
-                        setSomething = true;
-                    }
+                    if (inloopPred->relations.isLesser(firstLoadInLoop, valInloop))
+                        setSomething |= newGraph.setLesserEqual(valsOutloop[0], placeholder);
+
+                    if (inloopPred->relations.isLesser(valInloop, firstLoadInLoop))
+                        setSomething |= newGraph.setLesserEqual(placeholder, valsOutloop[0]);
 
                     if (setSomething) {
                         newGraph.setLoad(from, placeholder);
 
-                        for (const llvm::Value* val : valsOutloop) {
+                        for (const llvm::Value* val : valsOutloop)
                             newGraph.setEqual(valsOutloop[0], val);
-                        }
-                    } else {
+
+                        changed = true;
+                    } else if (newPlaceholder)
                         newGraph.erasePlaceholderBucket(placeholder);
-                    }
+                    
                 }
             }
         }
 
         for (const llvm::Value* from : froms)
-            intersectByLoad(preds, from, newGraph);
+            changed |= intersectByLoad(preds, from, newGraph);
 
         if (location->isJustLoopJoin()) {
             VRLocation* treePred = getTreePred(location);
@@ -811,12 +851,12 @@ class RelationsAnalyzer {
 
                     if (! isGoodFromForPlaceholder(locationsAfterInvalidating, from, fromsValues.second)) continue;
 
-                    intersectByLoad(locationsAfterInvalidating, from, newGraph);
+                    changed |= intersectByLoad(locationsAfterInvalidating, from, newGraph);
                 }
             }
         }
 
-        return andSwapIfChanged(location->relations, newGraph);
+        return changed;
 
     }
 
@@ -829,16 +869,13 @@ class RelationsAnalyzer {
         return true;
     }
 
-    void intersectByLoad(const std::vector<VRLocation*>& preds, const llvm::Value* from, RelationsGraph& newGraph) {
-        auto& loads = preds[0]->relations.getValsByPtr(from);
-        if (loads.empty()) return;
-
+    bool intersectByLoad(const std::vector<VRLocation*>& preds, const llvm::Value* from, RelationsGraph& newGraph) {
         const llvm::ConstantInt* bound = nullptr;
         for (VRLocation* pred : preds) {
             const RelationsGraph& predGraph = pred->relations;
 
             auto& loads = predGraph.getValsByPtr(from);
-            if (loads.empty()) return;
+            if (loads.empty()) return false;
             
             const llvm::ConstantInt* value = predGraph.getLesserEqualConstant(loads[0]);
             if (! value) {
@@ -850,14 +887,17 @@ class RelationsAnalyzer {
         }
 
         bool setSomething = false;
-        unsigned placeholder = newGraph.newPlaceholderBucket();
+        const unsigned* temp = newGraph.getPlaceholderBucket(from);
+        unsigned placeholder = temp ? *temp : newGraph.newPlaceholderBucket();
+        bool newPlaceholder = temp == nullptr;
 
-        if (bound) {
-            newGraph.setLesserEqual(bound, placeholder);
-            setSomething = true;
-        }
+
+        if (bound)
+            setSomething |= newGraph.setLesserEqual(bound, placeholder);
 
         const llvm::Value* loaded = preds[0]->relations.getValsByPtr(from)[0];
+
+        bool changed = false;
 
         for (auto it = preds[0]->relations.begin_all(loaded);
                   it != preds[0]->relations.end_all(loaded);
@@ -868,67 +908,47 @@ class RelationsAnalyzer {
             if (related == loaded) continue;
             switch (relation) {
                 case Relation::EQ:
-                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isEqual, false)) {
-                        newGraph.setEqual(related, placeholder);
-                        setSomething = true;
-                    } else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, false)) {
-                        newGraph.setLesserEqual(related, placeholder);
-                        setSomething = true;
-                    } else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, true)) {
-                        newGraph.setLesserEqual(placeholder, related);
-                        setSomething = true;
-                    }
+                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isEqual, false))
+                        setSomething |= newGraph.setEqual(related, placeholder);
+                    else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, false))
+                        setSomething |= newGraph.setLesserEqual(related, placeholder);
+                    else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, true))
+                        setSomething |= newGraph.setLesserEqual(placeholder, related);
                     break;
 
                 case Relation::LT:
-                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesser, false)) {
-                        newGraph.setLesser(related, placeholder);
-                        setSomething = true;
-                    } else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, false)) {
-                        newGraph.setLesserEqual(related, placeholder);
-                        setSomething = true;
-                    }
+                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesser, false))
+                        setSomething |= newGraph.setLesser(related, placeholder);
+                    else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, false))
+                        setSomething |= newGraph.setLesserEqual(related, placeholder);
                     break;
                 
                 case Relation::LE:
-                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, false)) {
-                        newGraph.setLesserEqual(related, placeholder);
-                        setSomething = true;
-                    }
+                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, false))
+                        setSomething |= newGraph.setLesserEqual(related, placeholder);
                     break;
                 
                 case Relation::GT:
-                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesser, true)) {
-                        newGraph.setLesser(placeholder, related);
-                        setSomething = true;
-                    } else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, true)) {
-                        newGraph.setLesserEqual(placeholder, related);
-                        setSomething = true;
-                    }
+                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesser, true))
+                        setSomething |= newGraph.setLesser(placeholder, related);
+                    else if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, true))
+                        setSomething |= newGraph.setLesserEqual(placeholder, related);
                     break;
 
                 case Relation::GE:
-                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, true)) {
-                        newGraph.setLesserEqual(placeholder, related);
-                        setSomething = true;
-                    }
+                    if (relatesByLoadInAll(preds, related, from, &RelationsGraph::isLesserEqual, true))
+                        setSomething |= newGraph.setLesserEqual(placeholder, related);
                     break;
             }
         }
 
         if (setSomething) {
             newGraph.setLoad(from, placeholder);
-        } else {
+            changed = true;
+        } else if (newPlaceholder)
             newGraph.erasePlaceholderBucket(placeholder);
-        }
-    }
 
-    bool andSwapIfChanged(RelationsGraph& oldGraph, RelationsGraph& newGraph) {
-        if (oldGraph == newGraph)
-            return false;
-            
-        swap(oldGraph, newGraph);
-        return true;
+        return changed;
     }
 
     void initializeCallRelations() {
@@ -970,19 +990,22 @@ class RelationsAnalyzer {
             auto& vrblockPtr = pair.second;
 
             for (auto& locationPtr : vrblockPtr->locations) {
-                //std::cerr << "LOCATION " << locationPtr->id << std::endl;
-                //for (VREdge* predEdge : locationPtr->predecessors) 
-                //    std::cerr << predEdge->op->toStr() << std::endl;
+                bool temp = false;
+                std::cerr << "LOCATION " << locationPtr->id << std::endl;
+                for (VREdge* predEdge : locationPtr->predecessors) 
+                    std::cerr << predEdge->op->toStr() << std::endl;
+                locationPtr->relations.ddump();
 
                 if (locationPtr->predecessors.size() > 1) {
-                    changed = mergeRelations(locationPtr.get())
+                    temp = mergeRelations(locationPtr.get())
                             | mergeLoads(locationPtr.get())
                             | mergeRelationsByLoads(locationPtr.get());
                 } else if (locationPtr->predecessors.size() == 1) {
                     VREdge* edge = locationPtr->predecessors[0];
-                    changed |= processOperation(edge->source, edge->target, edge->op.get());
+                    temp |= processOperation(edge->source, edge->target, edge->op.get());
                 } // else no predecessors => nothing to be passed
-                //locationPtr->relations.ddump();
+                locationPtr->relations.ddump();
+                changed |= temp;
             }
 
         }
@@ -1036,9 +1059,9 @@ public:
         bool changed = true;
         unsigned passNum = 0;
         while (changed && ++passNum <= maxPass) {
-            //std::cerr << "========================================================" << std::endl;
-            //std::cerr << "                     PASS NUMBER " << passNum             << std::endl;
-            //std::cerr << "========================================================" << std::endl;
+            std::cerr << "========================================================" << std::endl;
+            std::cerr << "                     PASS NUMBER " << passNum             << std::endl;
+            std::cerr << "========================================================" << std::endl;
             changed = analysisPass();
         }
     }
