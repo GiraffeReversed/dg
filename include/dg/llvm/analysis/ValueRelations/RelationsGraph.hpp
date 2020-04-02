@@ -113,6 +113,7 @@ class EqualityBucket {
 	using T = const llvm::Value*;
 
     friend class RelationsGraph;
+public:
 
     using BucketPtr = EqualityBucket*;
 	using BucketPtrSet = std::set<BucketPtr>;

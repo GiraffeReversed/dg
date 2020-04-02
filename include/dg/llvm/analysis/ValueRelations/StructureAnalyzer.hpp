@@ -137,7 +137,8 @@ class StructureAnalyzer {
                     if (std::find(backwardReach.begin(), backwardReach.end(), edge)
                             != backwardReach.end()) {
                         edge->target->inLoop = true;
-                        if (auto op = dynamic_cast<VRInstruction*>(edge->op.get())) {
+                        if (edge->op->isInstruction()) {
+                            auto* op = static_cast<VRInstruction*>(edge->op.get());
                             inloopValuesIt->second.emplace_back(op->getInstruction());
                         }
                     }
@@ -207,8 +208,10 @@ class StructureAnalyzer {
                     definedSucc.insert(definedHere.begin(), definedHere.end());
 
                     // add instruction, if edge carries any
-                    if (auto op = dynamic_cast<VRInstruction*>(succEdge->op.get()))
+                    if (succEdge->op->isInstruction()) {
+                        auto* op = static_cast<VRInstruction*>(succEdge->op.get());
                         definedSucc.emplace(op->getInstruction());
+                    }
 
                     toVisit.push_back(succLoc);
                 }
