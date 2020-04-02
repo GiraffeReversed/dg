@@ -72,9 +72,11 @@ struct VRAssume : public VROp {
 protected:
     VRAssume(VROpType type, const llvm::Value* v) : VROp(type), val(v) {}
 
+#ifndef NDEBUG
     std::string toStr() const override {
         return "assuming " + debug::getValName(val) + " is ";
     }
+#endif
 };
 
 struct VRAssumeBool : public VRAssume {
