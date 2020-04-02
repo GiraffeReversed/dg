@@ -131,21 +131,22 @@ int main(int argc, char *argv[])
         std::cout << "}\n";
     }
 
-    /*for (const auto& block : vr.getBlockMapping()) {
+    for (const auto& block : vr.getBlockMapping()) {
         for (const auto& loc : block.second->locations) {
             for (const auto& edge : loc->successors) {
                 if (edge->op->isInstruction()) {
                     const llvm::Instruction* inst = static_cast<dg::analysis::vr::VRInstruction*>(edge->op.get())->getInstruction();
-                    if (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(inst)) {
-                        const llvm::Type* type = gep->getPointerOperandType()->getElementType();
-                        unsigned size = llvm::DataLayout(M).getTypeAllocSize(type);
-                        const llvm::Value* llvmSize = llvm::ConstantInt::get(type, size);
+                    if (llvm::isa<llvm::GetElementPtrInst>(inst)) {
+                        llvm::PointerType* ptrType = llvm::cast<llvm::PointerType>(inst->getType());
+                        llvm::Type* usedType = ptrType->getElementType();
+                        unsigned size = llvm::DataLayout(M).getTypeAllocSize(usedType);
+                        const llvm::Value* llvmSize = llvm::ConstantInt::get(usedType, size);
                         std::cerr << vr.isValidPointer(inst, llvmSize) << std::endl;
                     }
                 }
             }
         }
-    }*/
+    }
 
 
     return 0;
