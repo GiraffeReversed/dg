@@ -40,16 +40,16 @@
 #pragma GCC diagnostic pop
 #endif
 
-#include "dg/llvm/analysis/PointsTo/PointerAnalysis.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFI.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFS.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFSInv.h"
-#include "dg/analysis/PointsTo/Pointer.h"
+#include "dg/llvm/PointerAnalysis/PointerAnalysis.h"
+#include "dg/PointerAnalysis/PointerAnalysisFI.h"
+#include "dg/PointerAnalysis/PointerAnalysisFS.h"
+#include "dg/PointerAnalysis/PointerAnalysisFSInv.h"
+#include "dg/PointerAnalysis/Pointer.h"
 
 #include "TimeMeasure.h"
 
 using namespace dg;
-using namespace dg::analysis::pta;
+using namespace dg::pta;
 using dg::debug::TimeMeasure;
 using llvm::errs;
 
@@ -60,6 +60,7 @@ static bool threads = false;
 static bool dump_graph_only = false;
 static bool names_with_funs = false;
 static bool callgraph = false;
+static bool callgraph_only = false;
 static uint64_t dump_iteration = 0;
 static const char *entry_func = "main";
 
@@ -471,10 +472,30 @@ static std::vector<std::string> splitList(const std::string& opt, char sep = ','
 }
 
 static void
-dumpPointerGraphdot(LLVMPointerAnalysis *pta, PTType type)
+dumpPointerGraphdot(DGLLVMPointerAnalysis *pta, PTType type)
 {
 
     printf("digraph \"Pointer State Subgraph\" {\n");
+
+    if (callgraph) {
+        // dump call-graph
+        const auto& CG = pta->getPS()->getCallGraph();
+        for (auto& it : CG) {
+            printf("NODEcg%u [label=\"%s\"]\n",
+                    it.second.getID(),
+                    it.first->getUserData<llvm::Function>()->getName().str().c_str());
+        }
+        for (auto& it : CG) {
+            for (auto succ : it.second.getCalls()) {
+                printf("NODEcg%u -> NODEcg%u\n", it.second.getID(), succ->getID());
+            }
+        }
+        if (callgraph_only) {
+            printf("}\n");
+            return;
+        }
+    }
+
 
     if (!display_only_func.empty()) {
         std::set<PSNode *> nodes;
@@ -520,26 +541,11 @@ dumpPointerGraphdot(LLVMPointerAnalysis *pta, PTType type)
         dumpToDot(pta->getNodes(), type);
     }
 
-    if (callgraph) {
-        // dump call-graph
-        const auto& CG = pta->getPS()->getCallGraph();
-        for (auto& it : CG) {
-            printf("NODEcg%u [label=\"%s\"]\n",
-                    it.second.getID(),
-                    PSNodeEntry::get(it.first)->getFunctionName().c_str());
-        }
-        for (auto& it : CG) {
-            for (auto succ : it.second.getCalls()) {
-                printf("NODEcg%u -> NODEcg%u\n", it.second.getID(), succ->getID());
-            }
-        }
-    }
-
     printf("}\n");
 }
 
 static void
-dumpPointerGraph(LLVMPointerAnalysis *pta, PTType type, bool todot)
+dumpPointerGraph(DGLLVMPointerAnalysis *pta, PTType type, bool todot)
 {
     assert(pta);
 
@@ -555,7 +561,7 @@ dumpPointerGraph(LLVMPointerAnalysis *pta, PTType type, bool todot)
 }
 
 static void
-dumpStats(LLVMPointerAnalysis *pta)
+dumpStats(DGLLVMPointerAnalysis *pta)
 {
     const auto& nodes = pta->getNodes();
     printf("Pointer subgraph size: %lu\n", nodes.size()-1);
@@ -721,7 +727,7 @@ int main(int argc, char *argv[])
     bool stats = false;
     const char *module = nullptr;
     PTType type = FLOW_INSENSITIVE;
-    uint64_t field_senitivity = Offset::UNKNOWN;
+    uint64_t field_sensitivity = Offset::UNKNOWN;
 
     // parse options
     for (int i = 1; i < argc; ++i) {
@@ -732,13 +738,16 @@ int main(int argc, char *argv[])
             else if (strcmp(argv[i+1], "inv") == 0)
                 type = WITH_INVALIDATE;
         } else if (strcmp(argv[i], "-pta-field-sensitive") == 0) {
-            field_senitivity = static_cast<uint64_t>(atoll(argv[i + 1]));
+            field_sensitivity = static_cast<uint64_t>(atoll(argv[i + 1]));
         } else if (strcmp(argv[i], "-dot") == 0) {
             todot = true;
         } else if (strcmp(argv[i], "-threads") == 0) {
             threads = true;
         } else if (strcmp(argv[i], "-callgraph") == 0) {
             callgraph = true;
+        } else if (strcmp(argv[i], "-callgraph-only") == 0) {
+            callgraph = true;
+            callgraph_only = true;
         } else if (strcmp(argv[i], "-ids-only") == 0) {
             ids_only = true;
         } else if (strcmp(argv[i], "-iteration") == 0) {
@@ -758,6 +767,8 @@ int main(int argc, char *argv[])
             entry_func = argv[i + 1];
         } else if (strcmp(argv[i], "-display-only") == 0) {
             display_only = argv[i + 1];
+        } else if (strcmp(argv[i], "-dbg") == 0) {
+            DBG_ENABLE();
         } else {
             module = argv[i];
         }
@@ -795,30 +806,35 @@ int main(int argc, char *argv[])
         }
     }
 
-    LLVMPointerAnalysis PTA(M, entry_func, field_senitivity, threads);
+
+
+    LLVMPointerAnalysisOptions opts;
+
+    if (type == FLOW_INSENSITIVE) {
+      opts.analysisType = dg::LLVMPointerAnalysisOptions::AnalysisType::fi;
+    } else if (type == WITH_INVALIDATE) {
+      opts.analysisType = dg::LLVMPointerAnalysisOptions::AnalysisType::inv;
+    } else {
+      opts.analysisType = dg::LLVMPointerAnalysisOptions::AnalysisType::fs;
+    }
+
+    opts.entryFunction = entry_func;
+    opts.fieldSensitivity = field_sensitivity;
+    opts.threads = threads;
+
+    DGLLVMPointerAnalysis PTA(M, opts);
 
     tm.start();
 
-    // use createAnalysis instead of the run() method so that we won't delete
-    // the analysis data (like memory objects) which may be needed
-    if (type == FLOW_INSENSITIVE) {
-        PA = std::unique_ptr<PointerAnalysis>(
-            PTA.createPTA<analysis::pta::PointerAnalysisFI>()
-            );
-    } else if (type == WITH_INVALIDATE) {
-        PA = std::unique_ptr<PointerAnalysis>(
-            PTA.createPTA<analysis::pta::PointerAnalysisFSInv>()
-            );
-    } else {
-        PA = std::unique_ptr<PointerAnalysis>(
-            PTA.createPTA<analysis::pta::PointerAnalysisFS>()
-            );
-    }
+    PTA.initialize();
 
     if (dump_graph_only) {
         dumpPointerGraph(&PTA, type, true);
         return 0;
     }
+
+    auto PA = PTA.getPTA();
+    assert(PA && "Did not initialize the analysis");
 
     // run the analysis
     if (dump_iteration > 0) {
@@ -837,7 +853,7 @@ int main(int argc, char *argv[])
     }
 
     tm.stop();
-    tm.report("INFO: Points-to analysis [new] took");
+    tm.report("INFO: Pointer analysis took");
 
     if (stats) {
         dumpStats(&PTA);

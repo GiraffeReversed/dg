@@ -44,11 +44,11 @@
 #include "dg/llvm/LLVMDependenceGraphBuilder.h"
 #include "dg/llvm/LLVMSlicer.h"
 #include "dg/llvm/LLVMDG2Dot.h"
-#include "dg/llvm/analysis/PointsTo/PointerAnalysis.h"
-#include "dg/llvm/analysis/ReachingDefinitions/ReachingDefinitions.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFS.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFI.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFSInv.h"
+#include "dg/llvm/PointerAnalysis/PointerAnalysis.h"
+#include "dg/PointerAnalysis/PointerAnalysisFS.h"
+#include "dg/PointerAnalysis/PointerAnalysisFI.h"
+#include "dg/PointerAnalysis/PointerAnalysisFSInv.h"
+#include "dg/llvm/DataDependence/DataDependence.h"
 
 #include "TimeMeasure.h"
 
@@ -67,7 +67,7 @@ int main(int argc, char *argv[])
     const char *slicing_criterion = nullptr;
     const char *dump_func_only = nullptr;
     const char *pts = "fi";
-    const char *rda = "dataflow";
+    const char *rda = "ssa";
     const char *entry_func = "main";
     CD_ALG cd_alg = CD_ALG::CLASSIC;
 
@@ -82,7 +82,7 @@ int main(int argc, char *argv[])
             opts &= ~PRINT_USE;
         } else if (strcmp(argv[i], "-pta") == 0) {
             pts = argv[++i];
-        } else if (strcmp(argv[i], "-rda") == 0) {
+        } else if (strcmp(argv[i], "-dda") == 0) {
             rda = argv[++i];
         } else if (strcmp(argv[i], "-no-data") == 0) {
             opts &= ~PRINT_DD;
@@ -150,9 +150,9 @@ int main(int argc, char *argv[])
     options.cdAlgorithm = cd_alg;
     options.threads = threads;
     options.PTAOptions.threads = threads;
-    options.RDAOptions.threads = threads;
+    options.DDAOptions.threads = threads;
     options.PTAOptions.entryFunction = entry_func;
-    options.RDAOptions.entryFunction = entry_func;
+    options.DDAOptions.entryFunction = entry_func;
     if (strcmp(pts, "fs") == 0) {
         options.PTAOptions.analysisType
             = LLVMPointerAnalysisOptions::AnalysisType::fs;
@@ -167,14 +167,14 @@ int main(int argc, char *argv[])
         abort();
     }
 
-    if (strcmp(rda, "dataflow") == 0) {
-        options.RDAOptions.analysisType
-            = analysis::LLVMReachingDefinitionsAnalysisOptions::AnalysisType::dataflow;
+    if (strcmp(rda, "rd") == 0) {
+        options.DDAOptions.analysisType
+            = LLVMDataDependenceAnalysisOptions::AnalysisType::rd;
     } else if (strcmp(rda, "ssa") == 0) {
-        options.RDAOptions.analysisType
-            = analysis::LLVMReachingDefinitionsAnalysisOptions::AnalysisType::ssa;
+        options.DDAOptions.analysisType
+            = LLVMDataDependenceAnalysisOptions::AnalysisType::ssa;
     } else {
-        llvm::errs() << "Unknown reaching definitions analysis, try: dataflow, ssa\n";
+        llvm::errs() << "Unknown reaching definitions analysis, try: rd, ssa\n";
         abort();
     }
 
@@ -192,7 +192,7 @@ int main(int argc, char *argv[])
 
         dg->getCallSites(sc, &callsites);
 
-        LLVMSlicer slicer;
+        llvmdg::LLVMSlicer slicer;
 
         if (strcmp(slicing_criterion, "ret") == 0) {
             if (mark_only)
@@ -220,7 +220,7 @@ int main(int argc, char *argv[])
             std::ofstream ofs(fl);
             llvm::raw_os_ostream output(ofs);
 
-            analysis::SlicerStatistics& st = slicer.getStatistics();
+            SlicerStatistics& st = slicer.getStatistics();
             errs() << "INFO: Sliced away " << st.nodesRemoved
                    << " from " << st.nodesTotal << " nodes\n";
 

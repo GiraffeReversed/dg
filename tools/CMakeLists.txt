@@ -12,7 +12,9 @@ if (LLVM_DG)
 
 	add_executable(llvm-dg-dump llvm-dg-dump.cpp)
 	target_link_libraries(llvm-dg-dump
-				PRIVATE LLVMdg
+				PRIVATE dgllvmdg
+				PRIVATE ${SVF_LIBS}
+				PRIVATE ${llvm_transformutils}
 				PRIVATE ${llvm_support}
 				PRIVATE ${llvm_analysis}
 				PRIVATE ${llvm_irreader}
@@ -23,21 +25,23 @@ if (LLVM_DG)
 		    llvm-slicer-opts.cpp llvm-slicer-opts.h
 		    llvm-slicer-utils.cpp llvm-slicer-utils.h
 		    llvm-slicer.h)
-	#target_link_libraries(dgllvmslicer PUBLIC LLVMdg)
+	#target_link_libraries(dgllvmslicer PUBLIC dgllvmdg)
 
 	add_executable(llvm-slicer llvm-slicer.cpp llvm-slicer-crit.cpp)
 	target_link_libraries(llvm-slicer PRIVATE dgllvmslicer
-					  PRIVATE LLVMdg)
+					  PRIVATE dgllvmdg
+					  PRIVATE ${SVF_LIBS})
 	target_link_libraries(llvm-slicer
 				PRIVATE ${llvm_irreader}
 				PRIVATE ${llvm_bitwriter}
 				PRIVATE ${llvm_analysis}
 				PRIVATE ${llvm_support}
+				PRIVATE ${llvm_transformutils}
 				PRIVATE ${llvm_core})
 	add_dependencies(llvm-slicer gitversion)
 
 	add_executable(llvm-pta-dump llvm-pta-dump.cpp)
-	target_link_libraries(llvm-pta-dump PRIVATE LLVMpta)
+	target_link_libraries(llvm-pta-dump PRIVATE dgllvmpta)
 	target_link_libraries(llvm-pta-dump
 				PRIVATE ${llvm_core}
 				PRIVATE ${llvm_irreader}
@@ -45,7 +49,7 @@ if (LLVM_DG)
 				PRIVATE ${llvm_support})
 
 	add_executable(llvm-pta-ben llvm-pta-ben.cpp)
-	target_link_libraries(llvm-pta-ben PRIVATE LLVMpta)
+	target_link_libraries(llvm-pta-ben PRIVATE dgllvmpta)
 	target_link_libraries(llvm-pta-ben
 				PRIVATE ${llvm_core}
 				PRIVATE ${llvm_irreader}
@@ -53,16 +57,24 @@ if (LLVM_DG)
 				PRIVATE ${llvm_support})
 
 	add_executable(llvm-pta-compare llvm-pta-compare.cpp)
-	target_link_libraries(llvm-pta-compare PRIVATE LLVMpta)
+	target_link_libraries(llvm-pta-compare PRIVATE dgllvmpta)
 	target_link_libraries(llvm-pta-compare
 				PRIVATE ${llvm_core}
 				PRIVATE ${llvm_irreader}
 				PRIVATE ${llvm_analysis}
 				PRIVATE ${llvm_support})
 
-	add_executable(llvm-rd-dump llvm-rd-dump.cpp)
-	target_link_libraries(llvm-rd-dump PRIVATE LLVMrd)
-	target_link_libraries(llvm-rd-dump
+	add_executable(llvm-dda-dump llvm-dda-dump.cpp)
+	target_link_libraries(llvm-dda-dump PRIVATE dgllvmdda)
+	target_link_libraries(llvm-dda-dump
+				PRIVATE ${llvm_core}
+				PRIVATE ${llvm_irreader}
+				PRIVATE ${llvm_analysis}
+				PRIVATE ${llvm_support})
+
+	add_executable(llvm-dda-compare llvm-dda-compare.cpp)
+	target_link_libraries(llvm-dda-compare PRIVATE dgllvmdda)
+	target_link_libraries(llvm-dda-compare
 				PRIVATE ${llvm_core}
 				PRIVATE ${llvm_irreader}
 				PRIVATE ${llvm_analysis}
@@ -82,13 +94,13 @@ if (LLVM_DG)
 				PRIVATE ${llvm_support})
 
         add_executable(llvm-thread-regions-dump llvm-thread-regions-dump.cpp)
-        target_link_libraries(llvm-thread-regions-dump PRIVATE dgThreadRegions
+        target_link_libraries(llvm-thread-regions-dump PRIVATE dgllvmthreadregions
                                                        PRIVATE ${llvm_core}
                                                        PRIVATE ${llvm_irreader}
                                                        PRIVATE ${llvm_support})
 
         add_executable(llvm-ntscd-dump llvm-ntscd-dump.cpp)
-        target_link_libraries(llvm-ntscd-dump PRIVATE dgControlDependence
+        target_link_libraries(llvm-ntscd-dump PRIVATE dgllvmcda
                                               PRIVATE ${llvm_core}
                                               PRIVATE ${llvm_irreader}
                                               PRIVATE ${llvm_analysis}
@@ -104,7 +116,7 @@ if (LLVM_DG)
 		DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dg/tools)
 
 	# copy also the wrapper scripts
-	install(FILES pta-show llvmrd-dump llvmdg-show llvm-slicer-c
+	install(FILES pta-show llvmdda-dump llvmdg-show llvm-slicer-c
 		DESTINATION bin)
 endif (LLVM_DG)
 

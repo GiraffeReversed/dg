@@ -1,8 +1,8 @@
-#include "dg/analysis/PointsTo/PointerAnalysisFI.h"
-#include "dg/llvm/analysis/PointsTo/PointerAnalysis.h"
+#include "dg/PointerAnalysis/PointerAnalysisFI.h"
+#include "dg/llvm/PointerAnalysis/PointerAnalysis.h"
 
-#include "../lib/llvm/analysis/ControlDependence/GraphBuilder.h"
-#include "../lib/llvm/analysis/ControlDependence/NonTerminationSensitiveControlDependencyAnalysis.h"
+#include "../lib/llvm/ControlDependence/GraphBuilder.h"
+#include "../lib/llvm/ControlDependence/NonTerminationSensitiveControlDependencyAnalysis.h"
 
 // ignore unused parameters in LLVM libraries
 #if (__clang__)
@@ -61,8 +61,14 @@ int main(int argc, const char *argv[]) {
         return 1;
     }
 
-    dg::LLVMPointerAnalysis pointsToAnalysis(M.get(), "main", dg::analysis::Offset::UNKNOWN, threads);
-    pointsToAnalysis.run<dg::analysis::pta::PointerAnalysisFI>();
+    dg::LLVMPointerAnalysisOptions opts;
+    opts.setEntryFunction("main");
+    opts.analysisType = dg::LLVMPointerAnalysisOptions::AnalysisType::fi;
+    opts.threads = threads;
+    opts.setFieldSensitivity(dg::Offset::UNKNOWN);
+
+    dg::DGLLVMPointerAnalysis pointsToAnalysis(M.get(), opts);
+    pointsToAnalysis.run();
 
     dg::cd::NonTerminationSensitiveControlDependencyAnalysis controlDependencyAnalysis(M.get()->getFunction("main"), &pointsToAnalysis);
     controlDependencyAnalysis.computeDependencies();

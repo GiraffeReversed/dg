@@ -1,89 +1,106 @@
 include_directories(${CMAKE_SOURCE_DIR}/lib)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
-add_library(DGAnalysis SHARED
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/Offset.h
+add_library(dganalysis SHARED
+	${CMAKE_SOURCE_DIR}/include/dg/Offset.h
 	${CMAKE_SOURCE_DIR}/include/dg/ADT/DGContainer.h
 	${CMAKE_SOURCE_DIR}/include/dg/ADT/Bitvector.h
 	${CMAKE_SOURCE_DIR}/include/dg/ADT/Bits.h
 	${CMAKE_SOURCE_DIR}/include/dg/ADT/NumberSet.h
 
-	analysis/Offset.cpp
+	Offset.cpp
 )
 
-add_library(PTA SHARED
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/SubgraphNode.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/PointsTo/Pointer.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/PointsTo/PointsToSet.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/PointsTo/MemoryObject.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/PointsTo/PointerGraph.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/PointsTo/PointerAnalysis.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/PointsTo/PointerAnalysisFI.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/PointsTo/PointerAnalysisFS.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/PointsTo/PointerGraphValidator.h
+add_library(dgpta SHARED
+	${CMAKE_SOURCE_DIR}/include/dg/SubgraphNode.h
+	${CMAKE_SOURCE_DIR}/include/dg/PointerAnalysis/Pointer.h
+	${CMAKE_SOURCE_DIR}/include/dg/PointerAnalysis/PointsToSet.h
+	${CMAKE_SOURCE_DIR}/include/dg/PointerAnalysis/MemoryObject.h
+	${CMAKE_SOURCE_DIR}/include/dg/PointerAnalysis/PointerGraph.h
+	${CMAKE_SOURCE_DIR}/include/dg/PointerAnalysis/PointerAnalysis.h
+	${CMAKE_SOURCE_DIR}/include/dg/PointerAnalysis/PointerAnalysisFI.h
+	${CMAKE_SOURCE_DIR}/include/dg/PointerAnalysis/PointerAnalysisFS.h
+	${CMAKE_SOURCE_DIR}/include/dg/PointerAnalysis/PointerGraphValidator.h
 
-	analysis/PointsTo/Pointer.cpp
-	analysis/PointsTo/PointerAnalysis.cpp
-	analysis/PointsTo/PointerGraphValidator.cpp
-	analysis/PointsTo/PointsToSet.cpp
+	PointerAnalysis/Pointer.cpp
+	PointerAnalysis/PointerAnalysis.cpp
+	PointerAnalysis/PointerGraphValidator.cpp
+	PointerAnalysis/PointsToSet.cpp
 )
-target_link_libraries(PTA PUBLIC DGAnalysis)
+target_link_libraries(dgpta PUBLIC dganalysis)
 
-add_library(RD SHARED
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/ReachingDefinitions/ReachingDefinitions.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/ReachingDefinitions/RDMap.h
-	${CMAKE_SOURCE_DIR}/include/dg/analysis/ReachingDefinitions/RDNode.h
+add_library(dgdda SHARED
+	${CMAKE_SOURCE_DIR}/include/dg/ReachingDefinitions/ReachingDefinitions.h
+	${CMAKE_SOURCE_DIR}/include/dg/ReachingDefinitions/RDMap.h
+	${CMAKE_SOURCE_DIR}/include/dg/ReadWriteGraph/RWNode.h
+	${CMAKE_SOURCE_DIR}/include/dg/ReadWriteGraph/RWBBlock.h
+	${CMAKE_SOURCE_DIR}/include/dg/ReadWriteGraph/ReadWriteGraph.h
+	${CMAKE_SOURCE_DIR}/include/dg/DataDependence/DataDependenceAnalysisImpl.h
+	${CMAKE_SOURCE_DIR}/include/dg/DataDependence/DataDependence.h
 
-	analysis/ReachingDefinitions/BasicRDMap.cpp
-	analysis/ReachingDefinitions/ReachingDefinitions.cpp
+	ReachingDefinitions/BasicRDMap.cpp
+	ReachingDefinitions/ReachingDefinitions.cpp
+	ReadWriteGraph/ReadWriteGraph.cpp
+	MemorySSA/MemorySSA.cpp
 )
-target_link_libraries(RD PUBLIC DGAnalysis)
+target_link_libraries(dgdda PUBLIC dganalysis)
 
 
 if (LLVM_DG)
 
-add_library(LLVMpta SHARED
-	${CMAKE_SOURCE_DIR}/include/dg/llvm/analysis/PointsTo/PointerAnalysis.h
-	${CMAKE_SOURCE_DIR}/include/dg/llvm/analysis/PointsTo/LLVMPointerAnalysisOptions.h
-	${CMAKE_SOURCE_DIR}/include/dg/llvm/analysis/PointsTo/PointerGraph.h
+add_library(dgllvmpta SHARED
+	${CMAKE_SOURCE_DIR}/include/dg/llvm/PointerAnalysis/PointerAnalysis.h
+	${CMAKE_SOURCE_DIR}/include/dg/llvm/PointerAnalysis/LLVMPointerAnalysisOptions.h
+	${CMAKE_SOURCE_DIR}/include/dg/llvm/PointerAnalysis/PointerGraph.h
 
-	llvm/analysis/PointsTo/PointerGraphValidator.h
-	llvm/analysis/PointsTo/PointerGraph.cpp
-	llvm/analysis/PointsTo/PointerGraphValidator.cpp
-	llvm/analysis/PointsTo/Block.cpp
-	llvm/analysis/PointsTo/Interprocedural.cpp
-	llvm/analysis/PointsTo/Structure.cpp
-	llvm/analysis/PointsTo/Globals.cpp
-	llvm/analysis/PointsTo/Constants.cpp
-	llvm/analysis/PointsTo/Instructions.cpp
-	llvm/analysis/PointsTo/Calls.cpp
-	llvm/analysis/PointsTo/Threads.cpp
+	llvm/PointerAnalysis/PointerGraphValidator.h
+	llvm/PointerAnalysis/PointerAnalysis.cpp
+	llvm/PointerAnalysis/PointerGraph.cpp
+	llvm/PointerAnalysis/PointerGraphValidator.cpp
+	llvm/PointerAnalysis/Block.cpp
+	llvm/PointerAnalysis/Interprocedural.cpp
+	llvm/PointerAnalysis/Structure.cpp
+	llvm/PointerAnalysis/Globals.cpp
+	llvm/PointerAnalysis/Constants.cpp
+	llvm/PointerAnalysis/Instructions.cpp
+	llvm/PointerAnalysis/Calls.cpp
+	llvm/PointerAnalysis/Threads.cpp
 )
-target_link_libraries(LLVMpta PUBLIC PTA)
+target_link_libraries(dgllvmpta PUBLIC dgpta)
 
-add_library(LLVMrd SHARED
-	llvm/analysis/ReachingDefinitions/LLVMRDBuilder.cpp
-	llvm/analysis/ReachingDefinitions/LLVMReachingDefinitions.cpp
-
-	${CMAKE_SOURCE_DIR}/include/dg/llvm/analysis/ReachingDefinitions/ReachingDefinitions.h
-	llvm/analysis/ReachingDefinitions/LLVMRDBuilder.h
+add_library(dgllvmforkjoin SHARED
+	llvm/ForkJoin/ForkJoin.h
+	llvm/ForkJoin/ForkJoin.cpp
 )
-target_link_libraries(LLVMrd
-			PUBLIC LLVMpta
-			PUBLIC RD)
 
-add_library(dgThreadRegions SHARED "")
-include(${CMAKE_CURRENT_SOURCE_DIR}/llvm/analysis/ThreadRegions/CMakeLists.txt)
-target_include_directories(dgThreadRegions
+target_link_libraries(dgllvmforkjoin PRIVATE dgllvmpta)
+
+add_library(dgllvmdda SHARED
+	llvm/ReadWriteGraph/LLVMReadWriteGraphBuilder.cpp
+	llvm/DataDependenceAnalysis/LLVMDataDependenceAnalysis.cpp
+	llvm/ForkJoin/ForkJoin.h
+	llvm/ForkJoin/ForkJoin.cpp
+
+	${CMAKE_SOURCE_DIR}/include/dg/llvm/DataDependence/DataDependence.h
+	llvm/ReadWriteGraph/LLVMReadWriteGraphBuilder.h
+)
+target_link_libraries(dgllvmdda
+			PUBLIC dgllvmpta
+			PUBLIC dgdda
+			PUBLIC dgllvmforkjoin)
+
+add_library(dgllvmthreadregions SHARED "")
+include(${CMAKE_CURRENT_SOURCE_DIR}/llvm/ThreadRegions/CMakeLists.txt)
+target_include_directories(dgllvmthreadregions
         PUBLIC
-            ${CMAKE_SOURCE_DIR}/include/dg/llvm/analysis/ThreadRegions)
-target_link_libraries(dgThreadRegions INTERFACE LLVMpta)
+            ${CMAKE_SOURCE_DIR}/include/dg/llvm/ThreadRegions)
+target_link_libraries(dgllvmthreadregions INTERFACE dgllvmpta PRIVATE dgllvmforkjoin)
 
-add_library(dgControlDependence SHARED "")
-include(${CMAKE_CURRENT_SOURCE_DIR}/llvm/analysis/ControlDependence/CMakeLists.txt)
-target_link_libraries(dgControlDependence INTERFACE LLVMpta)
+add_library(dgllvmcda SHARED "")
+include(${CMAKE_CURRENT_SOURCE_DIR}/llvm/ControlDependence/CMakeLists.txt)
+target_link_libraries(dgllvmcda INTERFACE dgllvmpta PRIVATE dgllvmforkjoin)
 
-add_library(LLVMdg SHARED
+add_library(dgllvmdg SHARED
 	${CMAKE_SOURCE_DIR}/include/dg/BBlock.h
 	${CMAKE_SOURCE_DIR}/include/dg/Node.h
 	${CMAKE_SOURCE_DIR}/include/dg/DependenceGraph.h
@@ -98,47 +115,49 @@ add_library(LLVMdg SHARED
 	llvm/LLVMNode.cpp
 	llvm/LLVMDependenceGraph.cpp
 	llvm/LLVMDGVerifier.cpp
-	llvm/analysis/Dominators/PostDominators.cpp
-	llvm/analysis/DefUse/DefUse.cpp
-	llvm/analysis/DefUse/DefUse.h
+	llvm/Dominators/PostDominators.cpp
+	llvm/DefUse/DefUse.cpp
+	llvm/DefUse/DefUse.h
 )
 
 # Get proper shared-library behavior (where symbols are not necessarily
 # resolved when the shared library is linked) on OS X.
 if(APPLE)
-  set_target_properties(LLVMdg PROPERTIES
+  set_target_properties(dgllvmdg PROPERTIES
     LINK_FLAGS "-undefined dynamic_lookup"
   )
 
-  set_target_properties(LLVMpta PROPERTIES
+  set_target_properties(dgllvmpta PROPERTIES
     LINK_FLAGS "-undefined dynamic_lookup"
   )
 
-  set_target_properties(LLVMrd PROPERTIES
+  set_target_properties(dgllvmdda PROPERTIES
     LINK_FLAGS "-undefined dynamic_lookup"
   )
 endif(APPLE)
 
 if (APPLE)
-	target_link_libraries(LLVMdg
-				PUBLIC LLVMpta
-				PUBLIC LLVMrd
-				PUBLIC dgThreadRegions
-				PUBLIC dgControlDependence
+	target_link_libraries(dgllvmdg
+				PUBLIC dgllvmpta
+				PUBLIC dgllvmdda
+				PUBLIC dgllvmthreadregions
+				PUBLIC dgllvmcda
 				PRIVATE ${llvm_support}
 				PRIVATE ${llvm_analysis}
 				PRIVATE ${llvm_irreader}
 				PRIVATE ${llvm_bitwriter}
 				PRIVATE ${llvm_core})
 else()
-	target_link_libraries(LLVMdg
-				PUBLIC LLVMpta
-				PUBLIC LLVMrd
-				PUBLIC dgThreadRegions
-				PUBLIC dgControlDependence)
+	target_link_libraries(dgllvmdg
+				PUBLIC dgllvmpta
+				PUBLIC dgllvmdda
+				PUBLIC dgllvmthreadregions
+				PUBLIC dgllvmcda)
 endif(APPLE)
 
-install(TARGETS LLVMdg dgThreadRegions dgControlDependence LLVMpta LLVMrd PTA RD DGAnalysis
+install(TARGETS dgllvmdg dgllvmthreadregions dgllvmcda
+                dgllvmpta dgllvmdda dgpta dgdda dganalysis
+		dgllvmforkjoin
 	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 endif(LLVM_DG)

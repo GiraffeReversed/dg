@@ -29,11 +29,11 @@
 #include <iostream>
 #include <fstream>
 
-#include "../lib/llvm/analysis/ThreadRegions/include/Graphs/ThreadRegionsBuilder.h"
-#include "../lib/llvm/analysis/ThreadRegions/include/Graphs/GraphBuilder.h"
-#include "dg/llvm/analysis/ThreadRegions/ControlFlowGraph.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFI.h"
-#include "dg/llvm/analysis/PointsTo/PointerAnalysis.h"
+#include "llvm/ThreadRegions/include/Graphs/ThreadRegionsBuilder.h"
+#include "llvm/ThreadRegions/include/Graphs/GraphBuilder.h"
+#include "dg/llvm/ThreadRegions/ControlFlowGraph.h"
+#include "dg/PointerAnalysis/PointerAnalysisFI.h"
+#include "dg/llvm/PointerAnalysis/PointerAnalysis.h"
 
 #include <iostream>
 
@@ -68,8 +68,8 @@ int main(int argc, const char *argv[])
         return 1;
     }
 
-    dg::LLVMPointerAnalysis pointsToAnalysis(M.get(), "main", dg::analysis::Offset::UNKNOWN, true);
-    pointsToAnalysis.run<dg::analysis::pta::PointerAnalysisFI>();
+    dg::DGLLVMPointerAnalysis pointsToAnalysis(M.get(), "main", dg::Offset::UNKNOWN, true);
+    pointsToAnalysis.run();
 
     ControlFlowGraph controlFlowGraph(&pointsToAnalysis);
     controlFlowGraph.buildFunction(M->getFunction("main"));

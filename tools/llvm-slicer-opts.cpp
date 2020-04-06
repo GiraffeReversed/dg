@@ -1,8 +1,8 @@
-#include "dg/analysis/Offset.h"
+#include "dg/Offset.h"
 #include "dg/llvm/LLVMDependenceGraph.h"
 #include "dg/llvm/LLVMDependenceGraphBuilder.h"
-#include "dg/llvm/analysis/PointsTo/LLVMPointerAnalysisOptions.h"
-#include "dg/llvm/analysis/ReachingDefinitions/LLVMReachingDefinitionsAnalysisOptions.h"
+#include "dg/llvm/PointerAnalysis/LLVMPointerAnalysisOptions.h"
+#include "dg/llvm/DataDependence/LLVMDataDependenceAnalysisOptions.h"
 
 // ignore unused parameters in LLVM libraries
 #if (__clang__)
@@ -26,13 +26,13 @@
 
 #include "git-version.h"
 
-using dg::analysis::LLVMPointerAnalysisOptions;
-using dg::analysis::LLVMReachingDefinitionsAnalysisOptions;
+using dg::LLVMPointerAnalysisOptions;
+using dg::LLVMDataDependenceAnalysisOptions;
 
 static void
 addAllocationFuns(dg::llvmdg::LLVMDependenceGraphOptions& dgOptions,
                   const std::string& allocationFuns) {
-    using dg::analysis::AllocationFunction;
+    using dg::AllocationFunction;
 
     auto items = splitList(allocationFuns);
     for (auto& item : items) {
@@ -56,7 +56,7 @@ addAllocationFuns(dg::llvmdg::LLVMDependenceGraphOptions& dgOptions,
         }
 
         dgOptions.PTAOptions.addAllocationFunction(subitms[0], type);
-        dgOptions.RDAOptions.addAllocationFunction(subitms[0], type);
+        dgOptions.DDAOptions.addAllocationFunction(subitms[0], type);
     }
 }
 
@@ -119,7 +119,7 @@ SlicerOptions parseSlicerOptions(int argc, char *argv[]) {
         llvm::cl::desc("Make PTA field sensitive/insensitive. The offset in a pointer\n"
                        "is cropped to Offset::UNKNOWN when it is greater than N bytes.\n"
                        "Default is full field-sensitivity (N = Offset::UNKNOWN).\n"),
-                       llvm::cl::value_desc("N"), llvm::cl::init(dg::analysis::Offset::UNKNOWN),
+                       llvm::cl::value_desc("N"), llvm::cl::init(dg::Offset::UNKNOWN),
                        llvm::cl::cat(SlicingOpts));
 
     llvm::cl::opt<bool> rdaStrongUpdateUnknown("rd-strong-update-unknown",
@@ -158,24 +158,27 @@ SlicerOptions parseSlicerOptions(int argc, char *argv[]) {
             clEnumValN(LLVMPointerAnalysisOptions::AnalysisType::fi, "fi", "Flow-insensitive PTA (default)"),
             clEnumValN(LLVMPointerAnalysisOptions::AnalysisType::fs, "fs", "Flow-sensitive PTA"),
             clEnumValN(LLVMPointerAnalysisOptions::AnalysisType::inv, "inv", "PTA with invalidate nodes")
+#ifdef HAVE_SVF
+            , clEnumValN(LLVMPointerAnalysisOptions::AnalysisType::svf, "svf", "Use pointer analysis from SVF project")
+#endif
     #if LLVM_VERSION_MAJOR < 4
             , nullptr
     #endif
             ),
         llvm::cl::init(LLVMPointerAnalysisOptions::AnalysisType::fi), llvm::cl::cat(SlicingOpts));
 
-    llvm::cl::opt<LLVMReachingDefinitionsAnalysisOptions::AnalysisType> rdaType("rda",
+    llvm::cl::opt<LLVMDataDependenceAnalysisOptions::AnalysisType> ddaType("dda",
         llvm::cl::desc("Choose reaching definitions analysis to use:"),
         llvm::cl::values(
-            clEnumValN(LLVMReachingDefinitionsAnalysisOptions::AnalysisType::dataflow,
-                       "dataflow", "Classical data-flow RDA (default)"),
-            clEnumValN(LLVMReachingDefinitionsAnalysisOptions::AnalysisType::ssa,
-                       "ssa", "MemorySSA-based RDA")
+            clEnumValN(LLVMDataDependenceAnalysisOptions::AnalysisType::rd,
+                       "rd", "Reaching definitions DDA"),
+            clEnumValN(LLVMDataDependenceAnalysisOptions::AnalysisType::ssa,
+                       "ssa", "MemorySSA DDA")
     #if LLVM_VERSION_MAJOR < 4
             , nullptr
     #endif
             ),
-        llvm::cl::init(LLVMReachingDefinitionsAnalysisOptions::AnalysisType::dataflow),
+        llvm::cl::init(LLVMDataDependenceAnalysisOptions::AnalysisType::ssa),
                        llvm::cl::cat(SlicingOpts));
 
     llvm::cl::opt<dg::CD_ALG> cdAlgorithm("cd-alg",
@@ -221,17 +224,17 @@ SlicerOptions parseSlicerOptions(int argc, char *argv[]) {
     options.dgOptions.entryFunction = entryFunction;
     options.dgOptions.PTAOptions.entryFunction = entryFunction;
     options.dgOptions.PTAOptions.fieldSensitivity
-                                    = dg::analysis::Offset(ptaFieldSensitivity);
+                                    = dg::Offset(ptaFieldSensitivity);
     options.dgOptions.PTAOptions.analysisType = ptaType;
 
     options.dgOptions.threads = threads;
     options.dgOptions.PTAOptions.threads = threads;
-    options.dgOptions.RDAOptions.threads = threads;
+    options.dgOptions.DDAOptions.threads = threads;
 
-    options.dgOptions.RDAOptions.entryFunction = entryFunction;
-    options.dgOptions.RDAOptions.strongUpdateUnknown = rdaStrongUpdateUnknown;
-    options.dgOptions.RDAOptions.undefinedArePure = undefinedArePure;
-    options.dgOptions.RDAOptions.analysisType = rdaType;
+    options.dgOptions.DDAOptions.entryFunction = entryFunction;
+    options.dgOptions.DDAOptions.strongUpdateUnknown = rdaStrongUpdateUnknown;
+    options.dgOptions.DDAOptions.undefinedArePure = undefinedArePure;
+    options.dgOptions.DDAOptions.analysisType = ddaType;
 
     addAllocationFuns(options.dgOptions, allocationFuns);
 

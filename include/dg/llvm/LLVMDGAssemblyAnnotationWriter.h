@@ -28,15 +28,15 @@
 #endif
 
 #include "dg/llvm/LLVMDependenceGraph.h"
-#include "dg/llvm/analysis/PointsTo/PointerAnalysis.h"
-#include "dg/llvm/analysis/ReachingDefinitions/ReachingDefinitions.h"
+#include "dg/llvm/PointerAnalysis/PointerAnalysis.h"
+#include "dg/llvm/DataDependence/DataDependence.h"
 
 namespace dg {
 namespace debug {
 
 class LLVMDGAssemblyAnnotationWriter : public llvm::AssemblyAnnotationWriter
 {
-    using LLVMReachingDefinitions = dg::analysis::rd::LLVMReachingDefinitions;
+    using LLVMDataDependenceAnalysis = dg::dda::LLVMDataDependenceAnalysis;
 public:
     enum AnnotationOptsT {
         // data dependencies
@@ -48,18 +48,21 @@ public:
         // points-to information
         ANNOTATE_PTR                = 1 << 3,
         // reaching definitions
-        ANNOTATE_RD                 = 1 << 4,
+        ANNOTATE_DU                 = 1 << 4,
         // post-dominators
         ANNOTATE_POSTDOM            = 1 << 5,
         // comment out nodes that will be sliced
         ANNOTATE_SLICE              = 1 << 6,
+        // annotate memory accesses (like ANNOTATE_PTR,
+        // but with byte intervals)
+        ANNOTATE_MEMORYACC          = 1 << 7,
     };
 
 private:
 
     AnnotationOptsT opts;
     LLVMPointerAnalysis *PTA;
-    LLVMReachingDefinitions *RD;
+    LLVMDataDependenceAnalysis *DDA;
     const std::set<LLVMNode *> *criteria;
     std::string module_comment{};
 
@@ -76,38 +79,26 @@ private:
             os << "\n";
     }
 
-    void printPointer(const analysis::pta::Pointer& ptr,
+    void printPointer(const LLVMPointer& ptr,
                       llvm::formatted_raw_ostream& os,
-                      const char *prefix = "PTR: ", bool nl = true)
-    {
+                      const char *prefix = "PTR: ", bool nl = true) {
         os << "  ; ";
         if (prefix)
             os << prefix;
 
-        if (!ptr.isUnknown()) {
-            if (ptr.isNull())
-                os << "null";
-            else if (ptr.isInvalidated())
-                os << "invalidated";
-            else {
-                const llvm::Value *val
-                    = ptr.target->getUserData<llvm::Value>();
-                printValue(val, os);
-            }
+        printValue(ptr.value, os);
 
-            os << " + ";
-            if (ptr.offset.isUnknown())
-                os << "UNKNOWN";
-            else
-                os << *ptr.offset;
-        } else
-            os << "unknown";
+        os << " + ";
+        if (ptr.offset.isUnknown())
+            os << "?";
+        else
+            os << *ptr.offset;
 
         if (nl)
             os << "\n";
     }
 
-    void printDefSite(const analysis::rd::DefSite& ds,
+    void printDefSite(const dda::DefSite& ds,
                       llvm::formatted_raw_ostream& os,
                       const char *prefix = nullptr, bool nl = false)
     {
@@ -123,12 +114,12 @@ private:
                 printValue(val, os);
 
             if (ds.offset.isUnknown())
-                os << " bytes |UNKNOWN";
+                os << " bytes |?";
             else
                 os << " bytes |" << *ds.offset;
 
             if (ds.len.isUnknown())
-                os << " - UNKNOWN|";
+                os << " - ?|";
             else
                 os << " - " <<  *ds.offset + *ds.len- 1 << "|";
         } else
@@ -139,16 +130,43 @@ private:
 
     }
 
+    void printMemRegion(const LLVMMemoryRegion& R,
+                        llvm::formatted_raw_ostream& os,
+                        const char *prefix = nullptr,
+                        bool nl = false) {
+        os << "  ; ";
+        if (prefix)
+            os << prefix;
+
+        assert(R.pointer.value);
+        printValue(R.pointer.value, os);
+
+        if (R.pointer.offset.isUnknown())
+            os << " bytes [?";
+        else
+            os << " bytes [" << *R.pointer.offset;
+
+        if (R.len.isUnknown())
+            os << " - ?]";
+        else
+            os << " - " <<  *R.pointer.offset + *R.len - 1 << "]";
+
+        if (nl)
+            os << "\n";
+    }
+
     void emitNodeAnnotations(LLVMNode *node, llvm::formatted_raw_ostream& os)
     {
-        if (opts & ANNOTATE_RD) {
-            assert(RD && "No reaching definitions analysis");
+        using namespace llvm;
+
+        if (opts & ANNOTATE_DU) {
+            assert(DDA && "No reaching definitions analysis");
             /*
 
             // FIXME
 
             LLVMDGParameters *params = node->getParameters();
-            // don't dump params when we use new analyses (RD is not null)
+            // don't dump params when we use new analyses (DDA is not null)
             // because there we don't add definitions with new analyses
             if (params) {
                 for (auto& it : *params) {
@@ -219,10 +237,34 @@ private:
             if (PTA) {
                 llvm::Type *Ty = node->getKey()->getType();
                 if (Ty->isPointerTy() || Ty->isIntegerTy()) {
-                    auto ps = PTA->getPointsTo(node->getKey());
-                    if (ps) {
-                        for (const auto& ptr : ps->pointsTo)
-                            printPointer(ptr, os);
+                    const auto& ps = PTA->getLLVMPointsTo(node->getKey());
+                    if (!ps.empty()) {
+                        for (const auto& llvmptr : ps) {
+                            printPointer(llvmptr, os);
+                        }
+                        if (ps.hasNull()) {
+                            os << "  ; null\n";
+                        }
+                        if (ps.hasUnknown()) {
+                            os << "  ; unknown\n";
+                        }
+                        if (ps.hasInvalidated()) {
+                            os << "  ; invalidated\n";
+                        }
+                    }
+                }
+            }
+        }
+
+        if (PTA && (opts & ANNOTATE_MEMORYACC)) {
+            if (auto I = dyn_cast<Instruction>(node->getValue())) {
+                if (I->mayReadOrWriteMemory()) {
+                    auto regions = PTA->getAccessedMemory(I);
+                    if (regions.first) {
+                            os << "  ; unknown region\n";
+                    }
+                    for (const auto& mem : regions.second) {
+                        printMemRegion(mem, os, nullptr, true);
                     }
                 }
             }
@@ -239,12 +281,12 @@ private:
 public:
     LLVMDGAssemblyAnnotationWriter(AnnotationOptsT o = ANNOTATE_SLICE,
                                    LLVMPointerAnalysis *pta = nullptr,
-                                   LLVMReachingDefinitions *rd = nullptr,
+                                   LLVMDataDependenceAnalysis *dda = nullptr,
                                    const std::set<LLVMNode *>* criteria = nullptr)
-        : opts(o), PTA(pta), RD(rd), criteria(criteria)
+        : opts(o), PTA(pta), DDA(dda), criteria(criteria)
     {
         assert(!(opts & ANNOTATE_PTR) || PTA);
-        assert(!(opts & ANNOTATE_RD) || RD);
+        assert(!(opts & ANNOTATE_DU) || DDA);
     }
 
     void emitModuleComment(const std::string& comment) {

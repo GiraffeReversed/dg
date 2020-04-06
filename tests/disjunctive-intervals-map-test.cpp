@@ -7,11 +7,11 @@
 
 #undef NDEBUG
 
-#include "dg/analysis/Offset.h"
-#include "dg/analysis/ReachingDefinitions/DisjunctiveIntervalMap.h"
+#include "dg/Offset.h"
+#include "dg/ADT/DisjunctiveIntervalMap.h"
 
-using namespace dg::analysis::rd;
-using dg::analysis::Offset;
+using namespace dg;
+using dg::ADT::DisjunctiveIntervalMap;
 
 static std::ostream& operator<<(std::ostream& os, const std::vector<std::tuple<int,int,int>>& v) {
     os << "{";

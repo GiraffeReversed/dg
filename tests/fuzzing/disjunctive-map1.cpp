@@ -6,11 +6,11 @@
 #include <cstdio>
 #endif
 
-#include "dg/analysis/ReachingDefinitions/DisjunctiveIntervalMap.h"
+#include "dg/ADT/DisjunctiveIntervalMap.h"
 
 extern "C"
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    dg::analysis::rd::DisjunctiveIntervalMap<int, int> M;
+    dg::ADT::DisjunctiveIntervalMap<int, int> M;
 
     const auto elems = size / sizeof(int);
     if (elems == 0)

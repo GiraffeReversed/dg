@@ -41,8 +41,8 @@
 #endif
 
 #undef NDEBUG // we need dump methods
-#include "dg/llvm/analysis/ValueRelations/AnalysisGraph.hpp"
-#include "dg/llvm/analysis/ValueRelations/getValName.h"
+#include "dg/llvm/ValueRelations/AnalysisGraph.hpp"
+#include "dg/llvm/ValueRelations/getValName.h"
 
 #include "TimeMeasure.h"
 

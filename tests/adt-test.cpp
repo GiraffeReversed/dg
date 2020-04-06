@@ -6,10 +6,10 @@
 
 #include "dg/ADT/Queue.h"
 #include "dg/ADT/Bitvector.h"
-#include "dg/analysis/ReachingDefinitions/RDMap.h"
+#include "dg/ReachingDefinitions/RDMap.h"
 
 using namespace dg::ADT;
-using dg::analysis::Offset;
+using dg::Offset;
 
 namespace dg {
 namespace tests {
@@ -110,7 +110,7 @@ public:
 
     void test()
     {
-        using namespace analysis::rd;
+        using namespace dda;
 
         check(intervalsDisjunctive(0, 1, 2, 20), "BUG: intervals should be disjunctive");
         check(intervalsDisjunctive(0, 1, 1, 2), "BUG: intervals should be disjunctive");

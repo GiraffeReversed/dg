@@ -12,7 +12,7 @@
 #include <map>
 #include <unordered_map>
 
-#include "dg/llvm/analysis/ThreadRegions/ControlFlowGraph.h"
+#include "dg/llvm/ThreadRegions/ControlFlowGraph.h"
 
 
 // forward declaration of llvm classes
@@ -24,7 +24,7 @@ namespace llvm {
 
 #include "dg/llvm/LLVMNode.h"
 #include "dg/DependenceGraph.h"
-#include "dg/analysis/ControlExpression/ControlExpression.h"
+#include "dg/ControlExpression/ControlExpression.h"
 
 namespace dg {
 
@@ -43,12 +43,10 @@ class LLVMPointerAnalysis;
 
 // FIXME: why PTA is only in the namespace dg
 // and this is that nested? Make it consistent...
-namespace analysis {
-namespace rd {
-    class LLVMReachingDefinitions;
-}};
 
-using analysis::rd::LLVMReachingDefinitions;
+namespace dda { class LLVMDataDependenceAnalysis; }
+
+using dda::LLVMDataDependenceAnalysis;
 
 using LLVMBBlock = dg::BBlock<LLVMNode>;
 
@@ -75,7 +73,7 @@ public:
     bool build(llvm::Module *m, llvm::Function *entry = nullptr);
     bool build(llvm::Module *m,
                LLVMPointerAnalysis *pts = nullptr,
-               LLVMReachingDefinitions *rda = nullptr,
+               LLVMDataDependenceAnalysis *rda = nullptr,
                llvm::Function *entry = nullptr);
 
     // build DependenceGraph for a function. This will automatically
@@ -135,14 +133,15 @@ public:
         if (alg_type == CD_ALG::CLASSIC) {
             computePostDominators(true);
             //makeSelfLoopsControlDependent();
-            if (terminSensitive)
-                addNoreturnDependencies();
         } else if (alg_type == CD_ALG::CONTROL_EXPRESSION) {
             computeControlExpression(true);
         } else if (alg_type == CD_ALG::NTSCD) {
             computeNonTerminationControlDependencies();
         } else
             abort();
+
+        if (terminSensitive)
+            addNoreturnDependencies();
     }
 
     bool verify() const;
@@ -162,7 +161,7 @@ public:
     }
 
     LLVMPointerAnalysis *getPTA() const { return PTA; }
-    LLVMReachingDefinitions *getRDA() const { return RDA; }
+    LLVMDataDependenceAnalysis *getDDA() const { return DDA; }
 
     LLVMNode *findNode(llvm::Value *value) const;
 
@@ -217,7 +216,7 @@ private:
     // points-to information (if available)
     LLVMPointerAnalysis *PTA;
     // reaching definitions information (if available)
-    LLVMReachingDefinitions *RDA;
+    LLVMDataDependenceAnalysis *DDA;
 
     // control expression for this graph
     ControlExpression CE;

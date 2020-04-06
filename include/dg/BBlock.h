@@ -1,14 +1,11 @@
-/// XXX add licence
-//
-
-#ifndef _BBLOCK_H_
-#define _BBLOCK_H_
+#ifndef BBLOCK_H_
+#define BBLOCK_H_
 
 #include <cassert>
 #include <list>
 
 #include "ADT/DGContainer.h"
-#include "analysis/legacy/Analysis.h"
+#include "legacy/Analysis.h"
 
 namespace dg {
 
@@ -486,8 +483,8 @@ private:
     std::set<NodeT *> callSites;
 
     // auxiliary data for different analyses
-    analysis::legacy::AnalysesAuxiliaryData analysisAuxData;
-    friend class analysis::legacy::BBlockAnalysis<NodeT>;
+    legacy::AnalysesAuxiliaryData analysisAuxData;
+    friend class legacy::BBlockAnalysis<NodeT>;
 };
 
 } // namespace dg

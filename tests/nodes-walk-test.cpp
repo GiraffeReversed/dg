@@ -1,11 +1,11 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
-#include <dg/analysis/NodesWalk.h>
+#include <dg/NodesWalk.h>
 #include <dg/ADT/Queue.h>
 #include <set>
 
-using namespace dg::analysis;
+using namespace dg;
 
 struct Node {
     std::vector<Node *> successors;
@@ -149,7 +149,7 @@ TEST_CASE("NodesWalk-disconnected2", "NodesWalk") {
 
 
 
-#include <dg/analysis/BFS.h>
+#include <dg/BFS.h>
 
 TEST_CASE("BFS-sanity", "BFS") {
     Node A, B, C, D;
@@ -237,7 +237,7 @@ TEST_CASE("BFS-order3", "BFS") {
 
 
 
-#include <dg/analysis/DFS.h>
+#include <dg/DFS.h>
 
 TEST_CASE("DFS1", "DFS") {
     Node A, B, C, D;

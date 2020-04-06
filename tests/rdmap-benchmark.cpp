@@ -1,17 +1,17 @@
 #include <vector>
 #include <string>
 
-#include "dg/analysis/ReachingDefinitions/RDMap.h"
-#include "dg/analysis/ReachingDefinitions/ReachingDefinitions.h"
+#include "dg/ReachingDefinitions/RDMap.h"
+#include "dg/ReachingDefinitions/ReachingDefinitions.h"
 #include "../tools/TimeMeasure.h"
 
 // create two random rd maps of the
 // size 'size' and merge them
 void run(int size, int times = 100000)
 {
-    using namespace dg::analysis::rd;
+    using namespace dg::dda;
 
-    std::vector<RDNode> rdnodes(size, RDNode());
+    std::vector<RWNode> rdnodes(size, RWNode());
 
     while (--times > 0) {
         RDMap A, B;

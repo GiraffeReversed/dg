@@ -40,20 +40,18 @@
 #pragma GCC diagnostic pop
 #endif
 
-#include "dg/llvm/analysis/PointsTo/PointerAnalysis.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFI.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFS.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFSInv.h"
-#include "dg/analysis/PointsTo/Pointer.h"
+#include "dg/llvm/PointerAnalysis/PointerAnalysis.h"
+#include "dg/PointerAnalysis/PointerAnalysisFI.h"
+#include "dg/PointerAnalysis/PointerAnalysisFS.h"
+#include "dg/PointerAnalysis/PointerAnalysisFSInv.h"
+#include "dg/PointerAnalysis/Pointer.h"
 
 #include "TimeMeasure.h"
 
 using namespace dg;
-using namespace dg::analysis::pta;
+using namespace dg::pta;
 using dg::debug::TimeMeasure;
 using llvm::errs;
-
-std::unique_ptr<PointerAnalysis> PA;
 
 enum PTType {
     FLOW_SENSITIVE = 1,
@@ -177,11 +175,11 @@ static int check_pointer(const Pointer& ptr, const char *name)
   return NoAlias;
 }
 
-static AliasResult doAlias(LLVMPointerAnalysis *pta,
+static AliasResult doAlias(DGLLVMPointerAnalysis *pta,
 			               llvm::Value *V1, llvm::Value*V2)
 {
-  PSNode *p1 = pta->getPointsTo(V1);
-  PSNode *p2 = pta->getPointsTo(V2);
+  PSNode *p1 = pta->getPointsToNode(V1);
+  PSNode *p2 = pta->getPointsToNode(V2);
   int count1 = 0;
   int count2 = 0;
   for (const Pointer& ptr1 : p1->pointsTo) {
@@ -271,7 +269,7 @@ static int test_checkfunc(const llvm::StringRef &fun)
 }
 
 static void
-evalPSNode(LLVMPointerAnalysis *pta, PSNode *node)
+evalPSNode(DGLLVMPointerAnalysis *pta, PSNode *node)
 {
   enum PSNodeType nodetype = node->getType();
   if (nodetype != PSNodeType::CALL) {
@@ -407,7 +405,7 @@ evalPSNode(LLVMPointerAnalysis *pta, PSNode *node)
 }
 
 static void
-evalPTA(LLVMPointerAnalysis *pta)
+evalPTA(DGLLVMPointerAnalysis *pta)
 {
   for (auto& node : pta->getNodes()) {
     if (!node)
@@ -424,7 +422,7 @@ int main(int argc, char *argv[])
     const char *module = nullptr;
     const char *entry_func = "main";
     PTType type = FLOW_INSENSITIVE;
-    uint64_t field_senitivity = Offset::UNKNOWN;
+    uint64_t field_sensitivity = Offset::UNKNOWN;
 
     // parse options
     for (int i = 1; i < argc; ++i) {
@@ -435,7 +433,7 @@ int main(int argc, char *argv[])
             else if (strcmp(argv[i+1], "inv") == 0)
                 type = WITH_INVALIDATE;
         } else if (strcmp(argv[i], "-pta-field-sensitive") == 0) {
-            field_senitivity = static_cast<uint64_t>(atoll(argv[i + 1]));
+            field_sensitivity = static_cast<uint64_t>(atoll(argv[i + 1]));
         } else if (strcmp(argv[i], "-entry") == 0) {
             entry_func = argv[i + 1];
         } else {
@@ -464,30 +462,27 @@ int main(int argc, char *argv[])
 
     TimeMeasure tm;
 
-    LLVMPointerAnalysis PTA(M, entry_func, field_senitivity);
+    LLVMPointerAnalysisOptions opts;
+
+    if (type == FLOW_INSENSITIVE) {
+      opts.analysisType = dg::LLVMPointerAnalysisOptions::AnalysisType::fi;
+    } else if (type == WITH_INVALIDATE) {
+      opts.analysisType = dg::LLVMPointerAnalysisOptions::AnalysisType::inv;
+    } else {
+      opts.analysisType = dg::LLVMPointerAnalysisOptions::AnalysisType::fs;
+    }
+
+    opts.entryFunction = entry_func;
+    opts.fieldSensitivity = field_sensitivity;
+
+    DGLLVMPointerAnalysis PTA(M, opts);
 
     tm.start();
 
-    // use createAnalysis instead of the run() method so that we won't delete
-    // the analysis data (like memory objects) which may be needed
-    if (type == FLOW_INSENSITIVE) {
-        PA = std::unique_ptr<PointerAnalysis>(
-            PTA.createPTA<analysis::pta::PointerAnalysisFI>()
-            );
-    } else if (type == WITH_INVALIDATE) {
-        PA = std::unique_ptr<PointerAnalysis>(
-            PTA.createPTA<analysis::pta::PointerAnalysisFSInv>()
-            );
-    } else {
-        PA = std::unique_ptr<PointerAnalysis>(
-            PTA.createPTA<analysis::pta::PointerAnalysisFS>()
-            );
-    }
-
-    PA->run();
+    PTA.run();
 
     tm.stop();
-    tm.report("INFO: Points-to analysis [new] took");
+    tm.report("INFO: Pointer analysis took");
 
     evalPTA(&PTA);
 

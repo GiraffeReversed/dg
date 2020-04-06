@@ -22,19 +22,21 @@
 #endif
 
 #include "dg/llvm/LLVMDependenceGraph.h"
-#include "dg/llvm/analysis/PointsTo/LLVMPointerAnalysisOptions.h"
-#include "dg/llvm/analysis/ReachingDefinitions/LLVMReachingDefinitionsAnalysisOptions.h"
+#include "dg/llvm/PointerAnalysis/LLVMPointerAnalysisOptions.h"
+#include "dg/llvm/DataDependence/DataDependence.h"
+#include "dg/llvm/DataDependence/LLVMDataDependenceAnalysisOptions.h"
 
-#include "dg/llvm/analysis/PointsTo/PointerAnalysis.h"
-#include "dg/llvm/analysis/ReachingDefinitions/ReachingDefinitions.h"
+#include "dg/llvm/PointerAnalysis/PointerAnalysis.h"
+#ifdef HAVE_SVF
+#include "dg/llvm/PointerAnalysis/SVFPointerAnalysis.h"
+#endif
+#include "dg/PointerAnalysis/PointerAnalysisFI.h"
+#include "dg/PointerAnalysis/PointerAnalysisFS.h"
+#include "dg/PointerAnalysis/PointerAnalysisFSInv.h"
+#include "dg/PointerAnalysis/Pointer.h"
+#include "dg/Offset.h"
 
-#include "dg/analysis/PointsTo/PointerAnalysisFI.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFS.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFSInv.h"
-#include "dg/analysis/PointsTo/Pointer.h"
-#include "dg/analysis/Offset.h"
-
-#include "dg/llvm/analysis/ThreadRegions/ControlFlowGraph.h"
+#include "dg/llvm/ThreadRegions/ControlFlowGraph.h"
 
 namespace llvm {
     class Module;
@@ -44,12 +46,9 @@ namespace llvm {
 namespace dg {
 namespace llvmdg {
 
-using analysis::LLVMPointerAnalysisOptions;
-using analysis::LLVMReachingDefinitionsAnalysisOptions;
-
 struct LLVMDependenceGraphOptions {
     LLVMPointerAnalysisOptions PTAOptions{};
-    LLVMReachingDefinitionsAnalysisOptions RDAOptions{};
+    LLVMDataDependenceAnalysisOptions DDAOptions{};
 
     bool terminationSensitive{true};
     CD_ALG cdAlgorithm{CD_ALG::CLASSIC};
@@ -61,9 +60,9 @@ struct LLVMDependenceGraphOptions {
     std::string entryFunction{"main"};
 
     void addAllocationFunction(const std::string& name,
-                               analysis::AllocationFunction F) {
+                               AllocationFunction F) {
         PTAOptions.addAllocationFunction(name, F);
-        RDAOptions.addAllocationFunction(name, F);
+        DDAOptions.addAllocationFunction(name, F);
     }
 };
 
@@ -71,7 +70,7 @@ class LLVMDependenceGraphBuilder {
     llvm::Module *_M;
     const LLVMDependenceGraphOptions _options;
     std::unique_ptr<LLVMPointerAnalysis> _PTA{};
-    std::unique_ptr<LLVMReachingDefinitions> _RD{};
+    std::unique_ptr<LLVMDataDependenceAnalysis> _DDA{nullptr};
     std::unique_ptr<LLVMDependenceGraph> _dg{};
     std::unique_ptr<ControlFlowGraph> _controlFlowGraph{};
     llvm::Function *_entryFunction{nullptr};
@@ -93,35 +92,15 @@ class LLVMDependenceGraphBuilder {
         assert(_PTA && "BUG: No PTA");
 
         _timerStart();
-
-        if (_options.PTAOptions.isFS())
-            _PTA->run<analysis::pta::PointerAnalysisFS>();
-        else if (_options.PTAOptions.isFI())
-            _PTA->run<analysis::pta::PointerAnalysisFI>();
-        else if (_options.PTAOptions.isFSInv())
-            _PTA->run<analysis::pta::PointerAnalysisFSInv>();
-        else {
-            assert(0 && "Wrong pointer analysis");
-            abort();
-        }
-
+        _PTA->run();
         _statistics.ptaTime = _timerEnd();
     }
 
-    void _runReachingDefinitionsAnalysis() {
-        assert(_RD && "BUG: No RD");
+    void _runDataDependenceAnalysis() {
+        assert(_DDA && "BUG: No RD");
 
         _timerStart();
-
-        if (_options.RDAOptions.isDataFlow()) {
-            _RD->run<dg::analysis::rd::ReachingDefinitionsAnalysis>();
-        } else if (_options.RDAOptions.isSSA()) {
-            _RD->run<dg::analysis::rd::SSAReachingDefinitionsAnalysis>();
-        } else {
-            assert( false && "unknown RDA type" );
-            abort();
-        }
-
+        _DDA->run();
         _statistics.rdaTime = _timerEnd();
     }
 
@@ -161,17 +140,27 @@ public:
     LLVMDependenceGraphBuilder(llvm::Module *M,
                                const LLVMDependenceGraphOptions& opts)
     : _M(M), _options(opts),
-      _PTA(new LLVMPointerAnalysis(M, _options.PTAOptions)),
-      _RD(new LLVMReachingDefinitions(M, _PTA.get(),
-                                      _options.RDAOptions)),
+      _PTA(createPTA()),
+      _DDA(new LLVMDataDependenceAnalysis(M, _PTA.get(),
+                                          _options.DDAOptions)),
       _dg(new LLVMDependenceGraph(opts.threads)),
-      _controlFlowGraph(new ControlFlowGraph(_PTA.get())),
+      _controlFlowGraph(_options.threads && !_options.PTAOptions.isSVF() ? // check SVF due to the static cast...
+            new ControlFlowGraph(static_cast<DGLLVMPointerAnalysis*>(_PTA.get())) : nullptr),
       _entryFunction(M->getFunction(_options.entryFunction)) {
         assert(_entryFunction && "The entry function not found");
     }
 
+    LLVMPointerAnalysis *createPTA() {
+#ifdef HAVE_SVF
+        if (_options.PTAOptions.isSVF())
+            return new SVFPointerAnalysis(_M, _options.PTAOptions);
+#endif
+
+        return new DGLLVMPointerAnalysis(_M, _options.PTAOptions);
+    }
+
     LLVMPointerAnalysis *getPTA() { return _PTA.get(); }
-    LLVMReachingDefinitions *getRDA() { return _RD.get(); }
+    LLVMDataDependenceAnalysis *getDDA() { return _DDA.get(); }
 
     const Statistics& getStatistics() const { return _statistics; }
 
@@ -179,14 +168,10 @@ public:
     std::unique_ptr<LLVMDependenceGraph>&& build() {
         // compute data dependencies
         _runPointerAnalysis();
-        _runReachingDefinitionsAnalysis();
-
-        if (_PTA->getForks().empty()) {
-            _dg->setThreads(false);
-        }
+        _runDataDependenceAnalysis();
 
         // build the graph itself (the nodes, but without edges)
-        _dg->build(_M, _PTA.get(), _RD.get(), _entryFunction);
+        _dg->build(_M, _PTA.get(), _DDA.get(), _entryFunction);
 
         // insert the data dependencies edges
         _dg->addDefUseEdges();
@@ -195,6 +180,10 @@ public:
         _runControlDependenceAnalysis();
 
         if (_options.threads) {
+            if (_options.PTAOptions.isSVF()) {
+                assert(0 && "Threading needs the DG pointer analysis, SVF is not supported yet");
+                abort();
+            }
             _controlFlowGraph->buildFunction(_entryFunction);
             _runInterferenceDependenceAnalysis();
             _runForkJoinAnalysis();
@@ -220,12 +209,8 @@ public:
         // data dependencies
         _runPointerAnalysis();
 
-        if (_PTA->getForks().empty()) {
-            _dg->setThreads(false);
-        }
-
         // build the graph itself
-        _dg->build(_M, _PTA.get(), _RD.get(), _entryFunction);
+        _dg->build(_M, _PTA.get(), _DDA.get(), _entryFunction);
 
         if (_options.threads) {
             _controlFlowGraph->buildFunction(_entryFunction);
@@ -251,7 +236,7 @@ public:
         _dg = std::move(dg);
 
         // data-dependence edges
-        _runReachingDefinitionsAnalysis();
+        _runDataDependenceAnalysis();
         _dg->addDefUseEdges();
 
         // fill-in control dependencies

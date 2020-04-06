@@ -1,13 +1,12 @@
 #include "catch.hpp"
 
-#include "dg/llvm/analysis/PointsTo/PointerAnalysis.h"
-#include "dg/analysis/PointsTo/PointerAnalysisFI.h"
+#include "dg/llvm/PointerAnalysis/PointerAnalysis.h"
+#include "dg/PointerAnalysis/PointerAnalysisFI.h"
 
-#include "../include/dg/llvm/analysis/ThreadRegions/ControlFlowGraph.h"
-#include "../include/dg/llvm/analysis/ThreadRegions/ThreadRegion.h"
-#include "../lib/llvm/analysis/ThreadRegions/include/Graphs/GraphBuilder.h"
-
-#include "../lib/llvm/analysis/ThreadRegions/include/Nodes/Nodes.h"
+#include "dg/llvm/ThreadRegions/ControlFlowGraph.h"
+#include "dg/llvm/ThreadRegions/ThreadRegion.h"
+#include "../lib/llvm/ThreadRegions/include/Graphs/GraphBuilder.h"
+#include "../lib/llvm/ThreadRegions/include/Nodes/Nodes.h"
 
 // ignore unused parameters in LLVM libraries
 #if (__clang__)
@@ -403,8 +402,8 @@ TEST_CASE("Test of GraphBuilder class methods", "[GraphBuilder]") {
     SMDiagnostic SMD;
     std::unique_ptr<Module> M = parseIRFile(SIMPLE_FILE, SMD, context);
     const Function * function = M->getFunction("sum");
-    dg::LLVMPointerAnalysis pointsToAnalysis(M.get(), "main", dg::analysis::Offset::UNKNOWN, true);
-    pointsToAnalysis.run<dg::analysis::pta::PointerAnalysisFI>();
+    dg::DGLLVMPointerAnalysis pointsToAnalysis(M.get(), "main", dg::Offset::UNKNOWN, true);
+    pointsToAnalysis.run();
     std::unique_ptr<GraphBuilder> graphBuilder(new GraphBuilder(&pointsToAnalysis));
 
     SECTION("Test of buildInstruction and findInstruction") {
@@ -467,8 +466,8 @@ TEST_CASE("GraphBuilder build tests", "[GraphBuilder]") {
     LLVMContext context;
     SMDiagnostic SMD;
     std::unique_ptr<Module> M = parseIRFile(PTHREAD_EXIT_FILE, SMD, context); 
-    dg::LLVMPointerAnalysis pointsToAnalysis(M.get(), "main", dg::analysis::Offset::UNKNOWN, true);
-    pointsToAnalysis.run<dg::analysis::pta::PointerAnalysisFI>();
+    dg::DGLLVMPointerAnalysis pointsToAnalysis(M.get(), "main", dg::Offset::UNKNOWN, true);
+    pointsToAnalysis.run();
     std::unique_ptr<GraphBuilder> graphBuilder(new GraphBuilder(&pointsToAnalysis));
 
     SECTION("Undefined function which is not really important for us") {

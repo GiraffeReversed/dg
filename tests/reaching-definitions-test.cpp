@@ -1,23 +1,23 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
-#include "dg/analysis/ReachingDefinitions/ReachingDefinitions.h"
-#include "dg/analysis/ReachingDefinitions/RDMap.h"
+#include "dg/ReachingDefinitions/ReachingDefinitions.h"
+#include "dg/ReachingDefinitions/RDMap.h"
 
-using namespace dg::analysis::rd;
+using namespace dg::dda;
 
 /*
 #ifdef DEBUG_ENABLED
 static void
-dumpMap(RDNode *node)
+dumpMap(RWNode *node)
 {
-    RDMap& map = node->getReachingDefinitions();
+    RDMap& map = node->getDefinitions();
     for (auto it : map) {
         const char *tname = it.first.target->getName();
         printf("%s %lu - %lu @ ",
                tname ? tname : "<noname>",
                *it.first.offset, *it.first.offset + *it.first.len);
-        for (RDNode *site : it.second) {
+        for (RWNode *site : it.second) {
             const char *sname = site->getName();
             printf("%s\n", sname ? sname : "<noname>");
         }
@@ -30,9 +30,9 @@ dumpMap(RDNode *node)
 template <typename RDType>
 void basic1()
 {
-    RDNode AL1, AL2;
-    RDNode S1, S2;
-    RDNode U1, U2, U3, U4, U5;
+    RWNode AL1, AL2;
+    RWNode S1, S2;
+    RWNode U1, U2, U3, U4, U5;
 
     S1.addDef(&AL1, 0, 2, true /* strong update */);
     S2.addDef(&AL1, 0, 4, true /* strong update */);
@@ -55,34 +55,34 @@ void basic1()
 
     // get reaching definitions of 0-th byte
     // (mem, off, len)
-    auto rd = RD.getReachingDefinitions(&U1);
+    auto rd = RD.getDefinitions(&U1);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U2);
+    rd = RD.getDefinitions(&U2);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U3);
+    rd = RD.getDefinitions(&U3);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U4);
+    rd = RD.getDefinitions(&U4);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
     // offset 4 should not be defined, since we had
     // defined 0 - 3 offsets (we're starting from 0)
-    rd = RD.getReachingDefinitions(&U5);
+    rd = RD.getDefinitions(&U5);
     CHECK(rd.size() == 0);
 }
 
 template <typename RDType>
 void basic2()
 {
-    RDNode AL1, AL2;
-    RDNode S1, S2;
-    RDNode U1, U2, U3, U4, U5;
+    RWNode AL1, AL2;
+    RWNode S1, S2;
+    RWNode U1, U2, U3, U4, U5;
 
     S1.addDef(&AL1, 0, 4, true /* strong update */);
     S2.addDef(&AL1, 0, 4, true /* strong update */);
@@ -104,34 +104,34 @@ void basic2()
     RDType RD(&AL1);
     RD.run();
 
-    auto rd = RD.getReachingDefinitions(&U1);
+    auto rd = RD.getDefinitions(&U1);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U2);
+    rd = RD.getDefinitions(&U2);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U3);
+    rd = RD.getDefinitions(&U3);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U4);
+    rd = RD.getDefinitions(&U4);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
     // offset 4 should not be defined);
     // defined 0 - 3 offsets (we're starting from 0)
-    rd = RD.getReachingDefinitions(&U5);
+    rd = RD.getDefinitions(&U5);
     CHECK(rd.size() == 0);
 }
 
 template <typename RDType>
 void basic3()
 {
-    RDNode AL1, AL2;
-    RDNode S1, S2;
-    RDNode U1, U2, U3, U4, U5, U6, U7, U8, U9;
+    RWNode AL1, AL2;
+    RWNode S1, S2;
+    RWNode U1, U2, U3, U4, U5, U6, U7, U8, U9;
 
     S1.addDef(&AL1, 0, 4, true /* strong update */);
     S2.addDef(&AL1, 4, 4, true /* strong update */);
@@ -162,48 +162,48 @@ void basic3()
     RDType RD(&AL1);
     RD.run();
 
-    auto rd = RD.getReachingDefinitions(&U1);
+    auto rd = RD.getDefinitions(&U1);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S1);
 
-    rd = RD.getReachingDefinitions(&U2);
+    rd = RD.getDefinitions(&U2);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S1);
 
-    rd = RD.getReachingDefinitions(&U3);
+    rd = RD.getDefinitions(&U3);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S1);
 
-    rd = RD.getReachingDefinitions(&U4);
+    rd = RD.getDefinitions(&U4);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S1);
 
-    rd = RD.getReachingDefinitions(&U5);
+    rd = RD.getDefinitions(&U5);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U6);
+    rd = RD.getDefinitions(&U6);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U7);
+    rd = RD.getDefinitions(&U7);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U8);
+    rd = RD.getDefinitions(&U8);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U9);
+    rd = RD.getDefinitions(&U9);
     CHECK(rd.size() == 0);
 }
 
 template <typename RDType>
 void basic4()
 {
-    RDNode AL1, AL2;
-    RDNode S1, S2;
-    RDNode U1, U2, U3, U4, U5, U6, U7, U8, U9;
+    RWNode AL1, AL2;
+    RWNode S1, S2;
+    RWNode U1, U2, U3, U4, U5, U6, U7, U8, U9;
 
     S1.addDef(&AL1, 0, 4, true /* strong update */);
     S2.addDef(&AL1, 2, 4, true /* strong update */);
@@ -233,30 +233,30 @@ void basic4()
     RD.run();
 
     // bytes 0 and 1 should be defined on S1
-    auto rd = RD.getReachingDefinitions(&U1);
+    auto rd = RD.getDefinitions(&U1);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S1);
 
-    rd = RD.getReachingDefinitions(&U2);
+    rd = RD.getDefinitions(&U2);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S1);
 
     // bytes 2 and 3 should be defined on both S1 and S2
-    rd = RD.getReachingDefinitions(&U3);
+    rd = RD.getDefinitions(&U3);
     CHECK(rd.size() == 2);
 
-    rd = RD.getReachingDefinitions(&U4);
+    rd = RD.getDefinitions(&U4);
     CHECK(rd.size() == 2);
 
-    rd = RD.getReachingDefinitions(&U5);
+    rd = RD.getDefinitions(&U5);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U6);
+    rd = RD.getDefinitions(&U6);
     CHECK(rd.size() == 1);
     CHECK(*(rd.begin()) == &S2);
 
-    rd = RD.getReachingDefinitions(&U7);
+    rd = RD.getDefinitions(&U7);
     CHECK(rd.size() == 0);
 }
 
@@ -278,18 +278,18 @@ TEST_CASE("Basic4 data-flow", "[data-flow]") {
 
 /*
 TEST_CASE("Basic1 memory-ssa", "[memory-ssa]") {
-    basic1<SSAReachingDefinitionsAnalysis>();
+    basic1<MemorySSATransformation>();
 }
 
 TEST_CASE("Basic2 memory-ssa", "[memory-ssa]") {
-    basic2<SSAReachingDefinitionsAnalysis>();
+    basic2<MemorySSATransformation>();
 }
 
 TEST_CASE("Basic3 memory-ssa", "[memory-ssa]") {
-    basic3<SSAReachingDefinitionsAnalysis>();
+    basic3<MemorySSATransformation>();
 }
 
 TEST_CASE("Basic4 memory-ssa", "[memory-ssa]") {
-    basic4<SSAReachingDefinitionsAnalysis>();
+    basic4<MemorySSATransformation>();
 }
 */
