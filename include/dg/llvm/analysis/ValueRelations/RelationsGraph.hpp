@@ -1400,8 +1400,8 @@ public:
 		for (auto& callRelation : callRelations) {
 			stream << std::endl << "    XOR relations" << std::endl;
 			for (auto& equalPair : callRelation.equalPairs)
-				stream << "{ " << debug::getValName(equalPair.first) << "; "
-							   << debug::getValName(equalPair.second)
+				stream << "{ " << strip(debug::getValName(equalPair.first)) << "; "
+							   << strip(debug::getValName(equalPair.second))
 					   << " }" << std::endl;
 			callRelation.callSiteRelations->generalDump(stream);
 		}
