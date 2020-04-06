@@ -331,6 +331,13 @@ public:
 		assert(equalities.size() > 0);
 		return equalities[0];
 	}
+
+	bool hasAllEqualitiesFrom(const EqualityBucket* other) const {
+		for (T val : other->equalities) {
+			if (std::find(equalities.begin(), equalities.end(), val) == equalities.end()) return false;
+		}
+		return true;
+	}
 };
 
 class RelationsGraph {
@@ -523,123 +530,60 @@ public:
 		return *this;
 	}
 
-	friend bool operator==(const RelationsGraph& lt, const RelationsGraph& rt) {
-		if (lt.nonEqualities != rt.nonEqualities) return false;
+	bool hasAllRelationsFrom(const RelationsGraph& other) const {
+		if (nonEqualities != other.nonEqualities || callRelations != other.callRelations) return false;
 
-		std::vector<T> ltVals = lt.getAllValues();
-        std::vector<T> rtVals = rt.getAllValues();
+		for (auto& bucketUniquePtr : other.buckets) {
 
-        std::sort(ltVals.begin(), ltVals.end());
-        std::sort(rtVals.begin(), rtVals.end());
+			EqualityBucket* otherBucket = bucketUniquePtr.get();
+			EqualityBucket* thisBucket = getThisBucket(other, otherBucket);
+			if (! thisBucket) return false;
 
-        if (ltVals != rtVals) {
-            return false;
-        }
+			for (auto it = otherBucket->begin_down(); it != otherBucket->end_down(); ++it) {
 
-        for (T val : ltVals) {
-			for (auto it = lt.begin_lesserEqual(val); it != lt.end_lesserEqual(val); ++it) {
-				T other; Relation relation;
-				std::tie(other, relation) = *it;
-				switch (relation) {
-					case Relation::EQ: if (! rt.isEqual(other, val))       return false; break;
-					case Relation::LE: if (! rt.isLesserEqual(other, val)) return false; break;
-					case Relation::LT: if (! rt.isLesser(other, val))      return false; break;
-					default: assert(0 && "going down, not up");
-				}
-			}
-        }
+				EqualityBucket* otherRelatedBucket = it->bucket;
+				EqualityBucket* thisRelatedBucket = getThisBucket(other, it->bucket);
+				if (! thisRelatedBucket) return false;
+				if (! thisRelatedBucket->hasAllEqualitiesFrom(otherRelatedBucket)) return false;
 
-		for (auto& val : rtVals) {
-			for (auto it = rt.begin_lesserEqual(val); it != rt.end_lesserEqual(val); ++it) {
-				T other; Relation relation;
-				std::tie(other, relation) = *it;
-				switch (relation) {
-					case Relation::EQ: if (! lt.isEqual(other, val))       return false; break;
-					case Relation::LE: if (! lt.isLesserEqual(other, val)) return false; break;
-					case Relation::LT: if (! lt.isLesser(other, val))      return false; break;
-					default: assert(0 && "going down, not up");
-				}
-			}
-        }
+				if (it->relation == Relation::EQ) continue; // nothing else can be done for same bucket
 
-		std::set<std::pair<std::vector<T>, std::vector<T>>> ltLoads = lt.getAllLoads();
-		std::set<std::pair<std::vector<T>, std::vector<T>>> rtLoads = rt.getAllLoads();
-
-		if (ltLoads != rtLoads) return false;
-
-		for (auto& pair : lt.loads) {
-			EqualityBucket* ltFromBucket = pair.first;
-			EqualityBucket* rtFromBucket = rt.mapToBucket.at(ltFromBucket->getEqual()[0]);
-
-			EqualityBucket* ltValBucket = pair.second;
-			EqualityBucket* rtValBucket = rt.loads.at(rtFromBucket);
-
-			for (auto it = ltValBucket->begin_down(); it != ltValBucket->end_down(); ++it) {
-				auto& equals = it->bucket->getEqual();
-				if (equals.empty()) continue;
-
-				EqualityBucket* rtRelatedBucket = rt.mapToBucket.at(equals[0]);
 				switch (it->relation) {
-					case Relation::EQ: if (! rt.isEqual(rtRelatedBucket, rtValBucket)) return false; break;
-					case Relation::LT: if (! rt.isLesser(rtRelatedBucket, rtValBucket)) return false; break;
-					case Relation::LE: if (! rt.isLesserEqual(rtRelatedBucket, rtValBucket)) return false; break;
+					case Relation::LT: if (! isLesser(thisRelatedBucket, thisBucket))      return false; break;
+					case Relation::LE: if (! isLesserEqual(thisRelatedBucket, thisBucket)) return false; break;
 					default: assert(0 && "going down, not up");
 				}
 			}
 
-			for (auto it = ltValBucket->begin_up(); it != ltValBucket->end_up(); ++it) {
-				auto& equals = it->bucket->getEqual();
-				if (equals.empty()) continue;
-
-				EqualityBucket* rtRelatedBucket = rt.mapToBucket.at(equals[0]);
-				switch (it->relation) {
-					case Relation::EQ: break; // already been here on way down
-					case Relation::GT: if (! rt.isLesser(rtValBucket, rtRelatedBucket)) return false; break;
-					case Relation::GE: if (! rt.isLesserEqual(rtValBucket, rtRelatedBucket)) return false; break;
-					default: assert(0 && "going down, not up");
-				}
+			if (other.hasLoad(otherBucket)) {
+				EqualityBucket* otherValBucket = other.loads.at(otherBucket);
+				EqualityBucket* thisValBucket = getThisBucket(other, otherValBucket);
+				if (! thisValBucket) return false;
+				if (! isLoad(thisBucket, thisValBucket)) return false;
 			}
 		}
-
-		for (auto& pair : rt.loads) {
-			EqualityBucket* rtFromBucket = pair.first;
-			EqualityBucket* ltFromBucket = lt.mapToBucket.at(rtFromBucket->getEqual()[0]);
-
-			EqualityBucket* rtValBucket = pair.second;
-			EqualityBucket* ltValBucket = lt.loads.at(ltFromBucket);
-
-			for (auto it = rtValBucket->begin_down(); it != rtValBucket->end_down(); ++it) {
-				auto& equals = it->bucket->getEqual();
-				if (equals.empty()) continue;
-
-				EqualityBucket* ltRelatedBucket = lt.mapToBucket.at(equals[0]);
-				switch (it->relation) {
-					case Relation::EQ: if (! lt.isEqual(ltRelatedBucket, ltValBucket)) return false; break;
-					case Relation::LT: if (! lt.isLesser(ltRelatedBucket, ltValBucket)) return false; break;
-					case Relation::LE: if (! lt.isLesserEqual(ltRelatedBucket, ltValBucket)) return false; break;
-					default: assert(0 && "going down, not up");
-				}
-			}
-
-			for (auto it = rtValBucket->begin_up(); it != rtValBucket->end_up(); ++it) {
-				auto& equals = it->bucket->getEqual();
-				if (equals.empty()) continue;
-
-				EqualityBucket* ltRelatedBucket = lt.mapToBucket.at(equals[0]);
-				switch (it->relation) {
-					case Relation::EQ: break; // already been here on way down
-					case Relation::GT: if (! rt.isLesser(ltValBucket, ltRelatedBucket)) return false; break;
-					case Relation::GE: if (! rt.isLesserEqual(ltValBucket, ltRelatedBucket)) return false; break;
-					default: assert(0 && "going down, not up");
-				}
-			}
-		}
-
-		return lt.callRelations == rt.callRelations;
+		return true;
 	}
 
-	friend bool operator!=(const RelationsGraph& lt, const RelationsGraph& rt) {
-		return ! (lt == rt);
+	EqualityBucket* getThisBucket(const RelationsGraph& other, EqualityBucket* otherBucket) const {
+		if (! otherBucket->getEqual().empty()) {
+			auto found = mapToBucket.find(otherBucket->getEqual()[0]);
+			if (found != mapToBucket.end())
+				return found->second;
+			return nullptr;
+		}
+
+		// else this is placeholder bucket
+		EqualityBucket* otherFromBucket = findByValue(other.loads, otherBucket);
+		assert(otherFromBucket);
+		assert(! otherFromBucket->getEqual().empty());
+		// if bucket is empty, it surely has to have a nonempty load bucket,
+		// they arent created under different circumstances
+
+		T from = otherFromBucket->getEqual()[0];
+		if (hasLoad(from))
+			return loads.at(mapToBucket.at(from));
+		return nullptr;
 	}
 
 	void merge(const RelationsGraph& other) {
