@@ -453,8 +453,9 @@ private:
 	}
 
 	bool hasRelations(EqualityBucket* bucket) const {
-		return bucket->getEqual().empty()
-			|| ++begin_all(bucket->getAny()) != end_all(bucket->getAny());
+		return bucket->getEqual().size() > 1
+			|| ++bucket->begin_down() != bucket->end_down()
+			|| ++bucket->begin_up()   != bucket->end_up();
 	}
 
 	bool hasRelationsOrLoads(EqualityBucket* bucket) const {
