@@ -378,7 +378,7 @@ private:
 					it = start->begin_down();
 				if (type == Type::UP)
 					it = start->begin_up();
-				toStrictIfNeeded();
+				toNextValidValue();
 			} else {
 				if (type == Type::DOWN)
 					it = start->end_down();
@@ -398,39 +398,31 @@ private:
 		}
 
 		value_type operator*() const {
-			if (it->relation != Relation::LE && strictOnly)
-				assert(0 && "iterator always stops at only at strict if demanded");
+			if (strictOnly && it->relation != Relation::LT && it->relation != Relation::GT)
+				assert(0 && "iterator always stops only at strict if demanded");
 			return { it->bucket->getEqual()[index], it->relation };
 		}
 
 		// make iterator always point at valid value or end
 		Iterator& operator++() {
-			if (it == start->end_up()) return *this;
-			if (it == start->end_down()) {
-				if (type != Type::ALL) return *this;
-
-				it = start->begin_up();
-				strictOnly = true; // else we would pass equal again
-				index = 0;
-				toStrictIfNeeded();
-				return *this;
-			}
+			if (it == start->end_up() || it == start->end_down()) return *this;
+			// we dont have to check if type == ALL because code later
+			// handles the jump between iterators
 
 			if (index + 1 < it->bucket->equalities.size()) {
 				++index;
 				return *this;
 			}
 
+			// else we need to move on to the next bucket
 			++it;
 			index = 0;
-			while (it != start->end_down()
-				&& it != start->end_up()
-				&& it->bucket->getEqual().empty()) ++it;
-			toStrictIfNeeded();
+			toNextValidValue();
 
 			if (it == start->end_down() && type == Type::ALL) {
-				it = start->begin_up();
-				toStrictIfNeeded();
+				// ++ so that we would not pass equal again
+				it = ++(start->begin_up());
+				toNextValidValue();
 			}
 
 			return *this;
@@ -443,13 +435,12 @@ private:
 		}
 		
 		private:
-		void toStrictIfNeeded() {
-			if (strictOnly) {
-				while (it != start->end_down()
-					&& it != start->end_up()
-					&& (it->relation != Relation::LT || it->relation != Relation::GT))
-					++it;
-			}
+		void toNextValidValue() {
+			while (it != start->end_down()
+				&& it != start->end_up()
+				&& (it->bucket->getEqual().empty()
+					|| (strictOnly && it->relation != Relation::LT && it->relation != Relation::GT)))
+				++it;
 		}
 	};
 
