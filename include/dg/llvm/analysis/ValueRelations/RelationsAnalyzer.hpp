@@ -644,13 +644,10 @@ class RelationsAnalyzer {
 
             std::set<const llvm::Value*> allInvalid;
 
-            for (VRLocation* pred : preds) {
-                RelationsGraph& graph = pred->relations;
-
-                for (const auto* inst : structure.getInloopValues(location)) {
-                    auto invalid = instructionInvalidates(graph, inst);
-                    allInvalid.insert(invalid.begin(), invalid.end());
-                }
+            for (const auto* inst : structure.getInloopValues(location)) {
+                const RelationsGraph& graph = locationMapping.at(inst)->relations;
+                auto invalid = instructionInvalidates(graph, inst);
+                allInvalid.insert(invalid.begin(), invalid.end());
             }
 
             VRLocation* treePred = getTreePred(location);
