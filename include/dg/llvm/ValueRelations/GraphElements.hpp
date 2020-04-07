@@ -31,8 +31,12 @@ public:
 #ifndef NDEBUG
     virtual std::string toStr() const = 0;
     
+    void generalDump(std::ostream& stream) {
+        stream << toStr();
+    }
+
     void dump() {
-        std::cout << toStr();
+        generalDump(std::cout);
     }
 #endif
 };
