@@ -83,7 +83,19 @@ class RelationsAnalyzer {
 
         if (! inst->mayWriteToMemory() && ! inst->mayHaveSideEffects())
             return std::set<const llvm::Value*>();
-        // DIFF does not ignore some intrinsic insts
+
+        if (auto intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(inst)) {
+            switch(intrinsic->getIntrinsicID()) {
+                case llvm::Intrinsic::lifetime_start:
+                case llvm::Intrinsic::lifetime_end:
+                case llvm::Intrinsic::stacksave:
+                case llvm::Intrinsic::stackrestore:
+                case llvm::Intrinsic::dbg_declare:
+                case llvm::Intrinsic::dbg_value:
+                    return std::set<const llvm::Value*>();
+                default: break;
+            }
+        }
 
         // handle nondet_int individually just because
         if (auto call = llvm::dyn_cast<llvm::CallInst>(inst)) {
