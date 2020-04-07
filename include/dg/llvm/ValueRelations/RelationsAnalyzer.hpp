@@ -786,8 +786,8 @@ class RelationsAnalyzer {
             }
         }
 
-        for (const llvm::Value* from : froms)
-            intersectByLoad(preds, from, newGraph);
+        //for (const llvm::Value* from : froms)
+        //    intersectByLoad(preds, from, newGraph);
 
         if (location->isJustLoopJoin()) {
             VRLocation* treePred = getTreePred(location);
@@ -1033,10 +1033,12 @@ public:
         bool changed = true;
         unsigned passNum = 0;
         while (changed && ++passNum <= maxPass) {
+            std::cerr << "iteration " << passNum << std::endl;
             //std::cerr << "========================================================" << std::endl;
             //std::cerr << "                     PASS NUMBER " << passNum             << std::endl;
             //std::cerr << "========================================================" << std::endl;
             changed = analysisPass();
+            std::cerr << "after iteration " << passNum << std::endl;
         }
     }
 };
