@@ -1015,6 +1015,7 @@ class RelationsAnalyzer {
                 if (gep->getPointerOperand() == val) {
                     if (gep->hasAllZeroIndices()) return true;
 
+                    // TODO really? remove
                     llvm::Type* valType = val->getType();
                     llvm::Type* gepType = gep->getPointerOperandType();
                     if (gepType->isVectorTy() || valType->isVectorTy())
@@ -1022,10 +1023,21 @@ class RelationsAnalyzer {
                     if (gepType->getPrimitiveSizeInBits() < valType->getPrimitiveSizeInBits()) return true;
                 }
 
+            } else if (auto intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(user)) {
+                switch(intrinsic->getIntrinsicID()) {
+                    case llvm::Intrinsic::lifetime_start:
+                    case llvm::Intrinsic::lifetime_end:
+                    case llvm::Intrinsic::stacksave:
+                    case llvm::Intrinsic::stackrestore:
+                    case llvm::Intrinsic::dbg_declare:
+                    case llvm::Intrinsic::dbg_value:
+                        continue;
+                    default:
+                        if (intrinsic->mayWriteToMemory()) return true;
+                }
             } else if (auto inst = llvm::dyn_cast<llvm::Instruction>(user)) {
                 if (inst->mayWriteToMemory()) return true;
             }
-            // DIFF doesn't check debug information and some intrinsic instructions
         }
         return false;
     }
