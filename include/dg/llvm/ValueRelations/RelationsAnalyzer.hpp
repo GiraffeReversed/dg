@@ -26,7 +26,7 @@
 #include <algorithm>
 
 #include "GraphElements.hpp"
-#include "RelationsGraph.hpp"
+#include "ValueRelations.hpp"
 #include "StructureAnalyzer.hpp"
 
 #ifndef NDEBUG
