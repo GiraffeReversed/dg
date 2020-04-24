@@ -447,10 +447,6 @@ private:
 		return contains(mapToBucket, val);
 	}
 
-	bool areInGraph(T lt, T rt) const {
-		return contains(mapToBucket, lt) && contains(mapToBucket, rt);
-	}
-
 	bool hasRelations(EqualityBucket* bucket) const {
 		return bucket->getEqual().size() > 1
 			|| ++bucket->begin_down() != bucket->end_down()
@@ -992,7 +988,7 @@ public:
 
 	bool isEqual(T lt, T rt) const {
 
-		if (! areInGraph(lt, rt))
+		if (! inGraph(lt) || ! inGraph(rt))
 			return false;
 
 		return isEqual(mapToBucket.at(lt), mapToBucket.at(rt));
@@ -1000,7 +996,7 @@ public:
 
 	bool isNonEqual(T lt, T rt) const {
 
-		if (! areInGraph(lt, rt))
+		if (! inGraph(lt) || ! inGraph(rt))
 			return false;
 
 		return isNonEqual(mapToBucket.at(lt), mapToBucket.at(rt));
@@ -1045,7 +1041,7 @@ public:
 
 	bool isLoad(T from, T val) const {
 		
-		if (! areInGraph(val, from))
+		if (! inGraph(from) || ! inGraph(val))
 			return false;
 	
 		return isLoad(mapToBucket.at(from), mapToBucket.at(val));
