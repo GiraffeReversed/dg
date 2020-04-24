@@ -115,7 +115,6 @@ class EqualityBucket {
 	using T = const llvm::Value*;
 
     friend class ValueRelations;
-public:
 
     using BucketPtr = EqualityBucket*;
 	using BucketPtrSet = std::set<BucketPtr>;
@@ -126,7 +125,7 @@ public:
 
 	std::vector<T> equalities;
 
-	struct Iterator {
+	struct BucketIterator {
 
 		using value_type = Frame;
 		using iterator_category = std::forward_iterator_tag;
@@ -139,8 +138,8 @@ public:
 		// I will think about it more...
 		bool goDown = false;
 		
-		Iterator() = default;
-		Iterator(EqualityBucket* start, bool down, bool begin): goDown(down) {
+		BucketIterator() = default;
+		BucketIterator(EqualityBucket* start, bool down, bool begin): goDown(down) {
 			if (begin) {
 				stack.push(Frame(start,
 								 goDown ? start->lesserEqual.begin() : start->parents.begin(),
@@ -148,11 +147,11 @@ public:
 			}
 		}
 
-		friend bool operator==(const Iterator& lt, const Iterator& rt) {
+		friend bool operator==(const BucketIterator& lt, const BucketIterator& rt) {
 			return lt.goDown == rt.goDown && lt.stack == rt.stack;
 		}
 
-		friend bool operator!=(const Iterator& lt, const Iterator& rt) {
+		friend bool operator!=(const BucketIterator& lt, const BucketIterator& rt) {
 			return ! (lt == rt);
 		}
 
@@ -162,7 +161,7 @@ public:
 		value_type& operator*() { return stack.top(); }
 		value_type* operator->() { return &stack.top(); }
 
-		Iterator& operator++() {
+		BucketIterator& operator++() {
 			if (stack.empty()) return *this;
 
 			Frame frame = stack.top();
@@ -196,7 +195,7 @@ public:
 			return *this;
 		}
 
-		Iterator operator++(int) {
+		BucketIterator operator++(int) {
 			auto preInc = *this;
 			++(*this);
 			return preInc;
@@ -207,20 +206,20 @@ public:
 		}
 	};
 
-	Iterator begin_down() {
-		return Iterator(this, true, true);
+	BucketIterator begin_down() {
+		return BucketIterator(this, true, true);
 	}
 
-	Iterator end_down() {
-		return Iterator(this, true, false);
+	BucketIterator end_down() {
+		return BucketIterator(this, true, false);
 	}
 
-	Iterator begin_up() {
-		return Iterator(this, false, true);
+	BucketIterator begin_up() {
+		return BucketIterator(this, false, true);
 	}
 
-	Iterator end_up() {
-		return Iterator(this, false, false);
+	BucketIterator end_up() {
+		return BucketIterator(this, false, false);
 	}
 
 	std::pair<std::stack<Frame>, bool> subtreeContains(const EqualityBucket* needle, bool ignoreLE) {
@@ -236,7 +235,7 @@ public:
 		return { std::stack<Frame>(), false };
 	}
 
-	void merge(EqualityBucket& other) { // TODO other should be const
+	void merge(const EqualityBucket& other) {
 		// set_union does't work in place
 		lesserEqual.insert(other.lesserEqual.begin(), other.lesserEqual.end());
 		for (EqualityBucket* bucketPtr : other.lesserEqual)
@@ -248,9 +247,12 @@ public:
 
 		parents.insert(other.parents.begin(), other.parents.end());
 		for (EqualityBucket* parent : other.parents) {
-			if (contains(parent->lesserEqual, &other)) parent->lesserEqual.insert(this);
-			else if (contains(parent->lesser,      &other)) parent->lesser.insert(this);
-			else assert(0); // was a parent so it must have been lesser or lesserEqual
+			if (contains(parent->lesserEqual, const_cast<EqualityBucket*>(&other)))
+				parent->lesserEqual.insert(this);
+			else if (contains(parent->lesser, const_cast<EqualityBucket*>(&other)))
+				parent->lesser.insert(this);
+			else
+				assert(0); // was a parent so it must have been lesser or lesserEqual
 		}
 
 		equalities.insert(equalities.end(),
@@ -305,22 +307,6 @@ public:
 		return getDirectlyRelated(false);
 	}
 
-	void getRelatedBuckets(std::vector<EqualityBucket*>& acc, bool goDown) {
-		BucketPtrSet nextBuckets;
-		if (goDown) {
-			nextBuckets.insert(lesserEqual.begin(), lesserEqual.end());
-			nextBuckets.insert(lesser.begin(), lesser.end());
-		} else {
-			nextBuckets.insert(parents.begin(), parents.end());
-		}
-
-		acc.insert(acc.end(), nextBuckets.begin(), nextBuckets.end());
-
-		for (EqualityBucket* bucket : nextBuckets) {
-			bucket->getRelatedBuckets(acc, goDown);
-		}		
-	}
-
 	std::vector<T>& getEqual() {
 		return equalities;
 	}
@@ -336,7 +322,8 @@ public:
 
 	bool hasAllEqualitiesFrom(const EqualityBucket* other) const {
 		for (T val : other->equalities) {
-			if (std::find(equalities.begin(), equalities.end(), val) == equalities.end()) return false;
+			if (std::find(equalities.begin(), equalities.end(), val) == equalities.end())
+				return false;
 		}
 		return true;
 	}
@@ -378,7 +365,7 @@ private:
 		Type type = Type::NONE;
 		bool strictOnly = false;
 		EqualityBucket* start;
-		EqualityBucket::Iterator it;
+		EqualityBucket::BucketIterator it;
 		unsigned index;
 		
 		Iterator(EqualityBucket* st, bool s, Type t, bool begin): type(t), strictOnly(s), start(st), index(0) {
