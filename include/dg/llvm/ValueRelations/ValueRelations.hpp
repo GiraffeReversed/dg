@@ -530,25 +530,22 @@ private:
 			oldBucketPtr = *it;
 
 			// replace nonEquality info to regard only remaining bucket
-			auto newNonEqIt = nonEqualities.find(newBucketPtr);
-			for (auto pairIt = nonEqualities.begin(); pairIt != nonEqualities.end(); ++pairIt) {
+			auto newNEIt = nonEqualities.find(newBucketPtr);
+			auto oldNEIt = nonEqualities.find(oldBucketPtr);
 
-				if (pairIt->first == oldBucketPtr) {
-					if (newNonEqIt != nonEqualities.end()) {
-						newNonEqIt->second.insert(pairIt->second.begin(), pairIt->second.end());
-					} else {
-						nonEqualities.emplace(newBucketPtr, pairIt->second);
-					}
-					pairIt = nonEqualities.erase(pairIt);
+			if (oldNEIt != nonEqualities.end()) {
+				for (EqualityBucket* nonEqual : oldNEIt->second) {
+					nonEqualities.at(nonEqual).emplace(newBucketPtr);
+					nonEqualities.at(nonEqual).erase(oldBucketPtr);
 				}
 
-				for (EqualityBucket* nonEqual : pairIt->second) {
-					if (nonEqual == oldBucketPtr) {
-						pairIt->second.emplace(newBucketPtr);
-						pairIt->second.erase(oldBucketPtr);
-						break;
-					}
-				}
+				oldNEIt->second.erase(newBucketPtr);
+				if (newNEIt != nonEqualities.end())
+					newNEIt->second.insert(oldNEIt->second.begin(), oldNEIt->second.end());
+				else
+					nonEqualities.emplace(newBucketPtr, oldNEIt->second);
+
+				nonEqualities.erase(oldBucketPtr);
 			}
 
 			// replace mapToBucket info to regard only remaining bucket
