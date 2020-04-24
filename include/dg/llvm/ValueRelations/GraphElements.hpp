@@ -144,7 +144,7 @@ struct VRLocation  {
 
     bool inLoop = false;
 
-    RelationsGraph relations;
+    ValueRelations relations;
 
     std::vector<VREdge *> predecessors;
     std::vector<std::unique_ptr<VREdge>> successors;

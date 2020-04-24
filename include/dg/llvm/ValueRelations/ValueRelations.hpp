@@ -112,7 +112,7 @@ class EqualityBucket {
 
 	using T = const llvm::Value*;
 
-    friend class RelationsGraph;
+    friend class ValueRelations;
 public:
 
     using BucketPtr = EqualityBucket*;
@@ -340,14 +340,14 @@ public:
 	}
 };
 
-class RelationsGraph {
+class ValueRelations {
 
 	using T = const llvm::Value*;
 
 public:
 	struct CallRelation {
 		std::vector<std::pair<const llvm::Value*, const llvm::Value*>> equalPairs;
-		RelationsGraph* callSiteRelations = nullptr;
+		ValueRelations* callSiteRelations = nullptr;
 
 		friend bool operator==(const CallRelation& lt, const CallRelation& rt) {
 			return lt.equalPairs == rt.equalPairs
@@ -471,7 +471,7 @@ private:
 			|| findByValue(loads, bucket);
 	}
 
-	EqualityBucket* getThisBucket(const RelationsGraph& other, EqualityBucket* otherBucket) const {
+	EqualityBucket* getThisBucket(const ValueRelations& other, EqualityBucket* otherBucket) const {
 		if (! otherBucket->getEqual().empty()) {
 			auto found = mapToBucket.find(otherBucket->getEqual()[0]);
 			if (found != mapToBucket.end())
@@ -712,9 +712,9 @@ private:
 	
 public:
 
-	RelationsGraph() = default;
+	ValueRelations() = default;
 	
-	RelationsGraph(const RelationsGraph& other):
+	ValueRelations(const ValueRelations& other):
 		lastPlaceholderId(other.lastPlaceholderId), callRelations(other.callRelations) {
 
 		std::map<EqualityBucket*, EqualityBucket*> oldToNewPtr;
@@ -751,7 +751,7 @@ public:
 		
 	}
 
-	friend void swap(RelationsGraph& first, RelationsGraph& second) {
+	friend void swap(ValueRelations& first, ValueRelations& second) {
 		using std::swap;
 
 		swap(first.buckets, second.buckets);
@@ -763,13 +763,13 @@ public:
 		swap(first.callRelations, second.callRelations);
 	}
 
-	RelationsGraph& operator=(RelationsGraph other) {
+	ValueRelations& operator=(ValueRelations other) {
 		swap(*this, other);
 
 		return *this;
 	}
 
-	bool hasAllRelationsFrom(const RelationsGraph& other) const {
+	bool hasAllRelationsFrom(const ValueRelations& other) const {
 		if (nonEqualities != other.nonEqualities || callRelations != other.callRelations) return false;
 
 		for (auto& bucketUniquePtr : other.buckets) {
@@ -804,7 +804,7 @@ public:
 		return true;
 	}
 
-	void merge(const RelationsGraph& other) {
+	void merge(const ValueRelations& other) {
 		// DANGER fogets placeholder buckets
 		std::vector<const llvm::Value*> values = other.getAllValues();
 

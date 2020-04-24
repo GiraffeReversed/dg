@@ -33,7 +33,7 @@ class AnalysisGraph {
     }
 
     std::pair<const llvm::Value*, uint64_t> getAllocatedCountAndSize(
-            const RelationsGraph& relations, 
+            const ValueRelations& relations, 
             const llvm::GetElementPtrInst* gep) const {
         for (const llvm::Value* equal : relations.getEqual(gep->getPointerOperand())) {
 
@@ -144,7 +144,7 @@ class AnalysisGraph {
     }
 
     std::string isValidForGraph(
-            RelationsGraph& relations,
+            ValueRelations& relations,
             const llvm::GetElementPtrInst* gep,
             uint64_t readSize) const {
         std::cerr << "==== PROOF BEGINS =====" << std::endl;
@@ -231,8 +231,8 @@ public:
             return isValidForGraph(relations, gep, readSize);
 
         // else we have to check that access is valid in every case
-        for (const RelationsGraph::CallRelation& callRelation : relations.getCallRelations()) {
-            RelationsGraph merged = relations;
+        for (const ValueRelations::CallRelation& callRelation : relations.getCallRelations()) {
+            ValueRelations merged = relations;
             for (auto& equalPair : callRelation.equalPairs)
                 merged.setEqual(equalPair.first, equalPair.second);
             merged.merge(*callRelation.callSiteRelations);
