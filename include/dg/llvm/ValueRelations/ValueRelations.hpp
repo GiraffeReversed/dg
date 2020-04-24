@@ -342,6 +342,10 @@ public:
 			return lt.equalPairs == rt.equalPairs
 				&& lt.callSiteRelations == rt.callSiteRelations;
 		}
+
+		friend bool operator!=(const CallRelation& lt, const CallRelation& rt) {
+			return ! (lt == rt);
+		}
 	};
 
 private:
@@ -357,7 +361,7 @@ private:
 
 	std::vector<CallRelation> callRelations;
 
-	struct Iterator {
+	struct ValueIterator {
 		using value_type = std::pair<T, Relation>;
 
 		enum Type { UP, DOWN, ALL, NONE };
@@ -368,7 +372,7 @@ private:
 		EqualityBucket::BucketIterator it;
 		unsigned index;
 		
-		Iterator(EqualityBucket* st, bool s, Type t, bool begin): type(t), strictOnly(s), start(st), index(0) {
+		ValueIterator(EqualityBucket* st, bool s, Type t, bool begin): type(t), strictOnly(s), start(st), index(0) {
 			if (begin) {
 				if (type == Type::DOWN || type == Type::ALL)
 					it = start->begin_down();
@@ -383,13 +387,13 @@ private:
 			}
 		}
 
-		friend bool operator==(const Iterator& lt, const Iterator& rt) {
+		friend bool operator==(const ValueIterator& lt, const ValueIterator& rt) {
 			return lt.type == rt.type
 			    && lt.strictOnly == rt.strictOnly
 				&& lt.it == rt.it;
 		}
 
-		friend bool operator!=(const Iterator& lt, const Iterator& rt) {
+		friend bool operator!=(const ValueIterator& lt, const ValueIterator& rt) {
 			return ! (lt == rt);
 		}
 
@@ -400,7 +404,7 @@ private:
 		}
 
 		// make iterator always point at valid value or end
-		Iterator& operator++() {
+		ValueIterator& operator++() {
 			if (it == start->end_up() || it == start->end_down()) return *this;
 			// we dont have to check if type == ALL because code later
 			// handles the jump between iterators
@@ -416,21 +420,20 @@ private:
 			toNextValidValue();
 
 			if (it == start->end_down() && type == Type::ALL) {
-				// ++ so that we would not pass equal again
-				it = ++(start->begin_up());
+				it = ++(start->begin_up()); // ++ so that we would not pass equal again
 				toNextValidValue();
 			}
 
 			return *this;
 		}
 
-		Iterator operator++(int) {
+		ValueIterator operator++(int) {
 			auto preInc = *this;
 			++(*this);
 			return preInc;
 		}
 		
-		private:
+	private:
 		void toNextValidValue() {
 			while (it != start->end_down()
 				&& it != start->end_up()
@@ -1065,44 +1068,44 @@ public:
 		return valBucket->getEqual();
 	}
 
-	Iterator begin_lesser(T val) const {
-		return Iterator(mapToBucket.at(val), true, Iterator::Type::DOWN, true);
+	ValueIterator begin_lesser(T val) const {
+		return ValueIterator(mapToBucket.at(val), true, ValueIterator::Type::DOWN, true);
 	}
 
-	Iterator end_lesser(T val) const {
-		return Iterator(mapToBucket.at(val), true, Iterator::Type::DOWN, false);
+	ValueIterator end_lesser(T val) const {
+		return ValueIterator(mapToBucket.at(val), true, ValueIterator::Type::DOWN, false);
 	}
 
-	Iterator begin_lesserEqual(T val) const {
-		return Iterator(mapToBucket.at(val), false, Iterator::Type::DOWN, true);
+	ValueIterator begin_lesserEqual(T val) const {
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::DOWN, true);
 	}
 
-	Iterator end_lesserEqual(T val) const {
-		return Iterator(mapToBucket.at(val), false, Iterator::Type::DOWN, false);
+	ValueIterator end_lesserEqual(T val) const {
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::DOWN, false);
 	}
 
-	Iterator begin_greater(T val) const {
-		return Iterator(mapToBucket.at(val), true, Iterator::Type::UP, true);
+	ValueIterator begin_greater(T val) const {
+		return ValueIterator(mapToBucket.at(val), true, ValueIterator::Type::UP, true);
 	}
 
-	Iterator end_greater(T val) const {
-		return Iterator(mapToBucket.at(val), true, Iterator::Type::UP, false);
+	ValueIterator end_greater(T val) const {
+		return ValueIterator(mapToBucket.at(val), true, ValueIterator::Type::UP, false);
 	}
 
-	Iterator begin_greaterEqual(T val) const {
-		return Iterator(mapToBucket.at(val), false, Iterator::Type::UP, true);
+	ValueIterator begin_greaterEqual(T val) const {
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::UP, true);
 	}
 
-	Iterator end_greaterEqual(T val) const {
-		return Iterator(mapToBucket.at(val), false, Iterator::Type::UP, false);
+	ValueIterator end_greaterEqual(T val) const {
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::UP, false);
 	}
 
-	Iterator begin_all(T val) const {
-		return Iterator(mapToBucket.at(val), false, Iterator::Type::ALL, true);
+	ValueIterator begin_all(T val) const {
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::ALL, true);
 	}
 
-	Iterator end_all(T val) const {
-		return Iterator(mapToBucket.at(val), false, Iterator::Type::ALL, false);
+	ValueIterator end_all(T val) const {
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::ALL, false);
 	}
 
 	std::vector<T> getSampleLesser(T val) const {
