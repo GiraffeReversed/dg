@@ -11,6 +11,8 @@
 
 #include <cassert>
 
+#include <llvm/IR/Value.h>
+
 #ifndef NDEBUG
     #include <iostream>
 	#include "getValName.h"
