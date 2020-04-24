@@ -237,7 +237,7 @@ class RelationsAnalyzer {
             if (c1->isOne()) solvesDiffOne(graph, param, add, false);
         }
 
-        const llvm::ConstantInt* constBound = graph.getLesserEqualConstant(param);
+        const llvm::ConstantInt* constBound = graph.getLesserEqualBound(param);
         if (constBound) {
             const llvm::APInt& boundResult = constBound->getValue() + c2->getValue();
             const llvm::Constant* llvmResult = llvm::ConstantInt::get(add->getType(), boundResult);
@@ -281,7 +281,7 @@ class RelationsAnalyzer {
             if (c2->isOne()) solvesDiffOne(graph, param, sub, true);
         }
 
-        const llvm::ConstantInt* constBound = graph.getLesserEqualConstant(param);
+        const llvm::ConstantInt* constBound = graph.getLesserEqualBound(param);
         if (constBound) {
             const llvm::APInt& boundResult = constBound->getValue() - c2->getValue();
             const llvm::Constant* llvmResult = llvm::ConstantInt::get(sub->getType(), boundResult);
@@ -852,7 +852,7 @@ class RelationsAnalyzer {
             auto& loads = predGraph.getValsByPtr(from);
             if (loads.empty()) return;
             
-            const llvm::ConstantInt* value = predGraph.getLesserEqualConstant(loads[0]);
+            const llvm::ConstantInt* value = predGraph.getLesserEqualBound(loads[0]);
             if (! value) {
                 bound = nullptr;
                 break;

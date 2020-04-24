@@ -332,6 +332,7 @@ class EqualityBucket {
 class ValueRelations {
 
 	using T = const llvm::Value*;
+	using C = const llvm::ConstantInt*;
 
 public:
 	struct CallRelation {
@@ -664,34 +665,32 @@ private:
 		return found->second.find(rtEqBucket) != found->second.end();
 	}
 
+	C getEqualConstant(EqualityBucket* ltEqBucket) const {
+		C ltConst = nullptr;
+		for (const llvm::Value* val : ltEqBucket->getEqual()) {
+			if (auto constant = llvm::dyn_cast<llvm::ConstantInt>(val))
+				ltConst = constant;
+		}
+		
+		return ltConst;
+	}
+
 	bool isLesser(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
 		if (rtEqBucket->subtreeContains(ltEqBucket, true).second) return true;
 
-		const llvm::ConstantInt* constLt = nullptr;
-		for (const llvm::Value* val : ltEqBucket->getEqual()) {
-			if (auto constant = llvm::dyn_cast<llvm::ConstantInt>(val))
-				constLt = constant;
-		}
+		C ltConst = getEqualConstant(ltEqBucket);
+		C rtBound = getLesserEqualBound(rtEqBucket);
 
-		if (! constLt) return false;
-
-		const llvm::ConstantInt* constBound = getLesserEqualConstant(rtEqBucket);
-		return constBound && constLt->getValue().slt(constBound->getValue());
+		return ltConst && rtBound && ltConst->getValue().slt(rtBound->getValue());
 	}
 
 	bool isLesserEqual(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
 		if (rtEqBucket->subtreeContains(ltEqBucket, false).second) return true;
 
-		const llvm::ConstantInt* constLt = nullptr;
-		for (const llvm::Value* val : ltEqBucket->getEqual()) {
-			if (auto constant = llvm::dyn_cast<llvm::ConstantInt>(val))
-				constLt = constant;
-		}
+		C ltConst = getEqualConstant(ltEqBucket);
+		C rtBound = getLesserEqualBound(rtEqBucket);
 
-		if (! constLt) return false;
-
-		const llvm::ConstantInt* constBound = getLesserEqualConstant(rtEqBucket);
-		return constBound && constLt->getValue().sle(constBound->getValue());
+		return ltConst && rtBound && ltConst->getValue().sle(rtBound->getValue());
 	}
 
 	bool isLoad(EqualityBucket* fromBucketPtr, EqualityBucket* valBucketPtr) const {
@@ -703,11 +702,12 @@ private:
 		return loads.find(fromBucketPtr) != loads.end();
 	}
 
-	const llvm::ConstantInt* getLesserEqualConstant(EqualityBucket* bucket) const {
+	C getLesserEqualBound(EqualityBucket* bucket) const {
 
-		const llvm::ConstantInt* highest = nullptr;
+		C highest = nullptr;
 		for (auto it = bucket->begin_down(); it != bucket->end_down(); ++it) {
 			for (const llvm::Value* val : it->bucket->getEqual()) {
+
 				if (auto constant = llvm::dyn_cast<llvm::ConstantInt>(val)) {
 					if (! highest || constant->getValue().sgt(highest->getValue()))
 						highest = constant;
@@ -1014,7 +1014,7 @@ public:
 		}
 		
 		if (auto constLt = llvm::dyn_cast<llvm::ConstantInt>(lt)) {
-			const llvm::ConstantInt* constBound = getLesserEqualConstant(rt);
+			C constBound = getLesserEqualBound(rt);
 			if (constBound && constLt->getValue().slt(constBound->getValue()))
 				return true;
 		}
@@ -1032,7 +1032,7 @@ public:
 		}
 		
 		if (auto constLt = llvm::dyn_cast<llvm::ConstantInt>(lt)) {
-			const llvm::ConstantInt* constBound = getLesserEqualConstant(rt);
+			C constBound = getLesserEqualBound(rt);
 			if (constBound && constLt->getValue().sle(constBound->getValue()))
 				return true;
 		}
@@ -1141,10 +1141,10 @@ public:
 		return result;
 	}
 
-	const llvm::ConstantInt* getLesserEqualConstant(T val) const {
+	C getLesserEqualBound(T val) const {
 
 		if (! inGraph(val)) return nullptr;
-		return getLesserEqualConstant(mapToBucket.at(val));
+		return getLesserEqualBound(mapToBucket.at(val));
 	}
 
 	std::vector<T> getAllValues() const {
