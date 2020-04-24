@@ -572,6 +572,7 @@ private:
 			// make successors and parents of right forget it
 			oldBucketPtr->disconnectAll();
 
+			// replace placeholder info to disregard removed bucket
 			for (auto pair : placeholderBuckets) {
 				if (pair.second == oldBucketPtr) {
 					placeholderBuckets.erase(pair.first);
@@ -649,8 +650,6 @@ private:
 		} else {
 			loads.emplace(fromBucketPtr, valBucketPtr);
 		}
-		// TODO can there be a situation, in which the fact, that i can load
-		// same value from different pointer, means that the pointers are equal?
 	}
 
 	bool isEqual(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
@@ -745,14 +744,17 @@ public:
 		for (auto& pair : other.mapToBucket)
 			mapToBucket.emplace(pair.first, oldToNewPtr.at(pair.second));
 
+		// set placeholder buckets to use new copies
 		for (auto& pair : other.placeholderBuckets)
 			placeholderBuckets.emplace(pair.first, oldToNewPtr.at(pair.second));
 
+		// set nonEqualities to use new copies
 		for (auto& pair : other.nonEqualities) {
 			auto returnPair = nonEqualities.emplace(oldToNewPtr.at(pair.first), pair.second);
 			substitueInSet(oldToNewPtr, returnPair.first->second);
 		}
 
+		// set loads to use new copies
 		for (auto& pair : other.loads)
 			loads.emplace(oldToNewPtr.at(pair.first), oldToNewPtr.at(pair.second));
 		
@@ -779,6 +781,7 @@ public:
 	bool hasAllRelationsFrom(const ValueRelations& other) const {
 		if (nonEqualities != other.nonEqualities || callRelations != other.callRelations) return false;
 
+		// check all relations for all buckets
 		for (auto& bucketUniquePtr : other.buckets) {
 
 			EqualityBucket* otherBucket = bucketUniquePtr.get();
@@ -790,8 +793,9 @@ public:
 				EqualityBucket* otherRelatedBucket = it->bucket;
 				EqualityBucket* thisRelatedBucket = getCorrespondingBucket(other, it->bucket);
 				if (! thisRelatedBucket) return false;
-				if (! thisRelatedBucket->hasAllEqualitiesFrom(otherRelatedBucket)) return false;
 
+				// check whether corresponding buckets contain the same values
+				if (! thisRelatedBucket->hasAllEqualitiesFrom(otherRelatedBucket)) return false;
 				if (it->relation == Relation::EQ) continue; // nothing else can be done for same bucket
 
 				switch (it->relation) {
@@ -805,6 +809,7 @@ public:
 				EqualityBucket* otherValBucket = other.loads.at(otherBucket);
 				EqualityBucket* thisValBucket = getCorrespondingBucket(other, otherValBucket);
 				if (! thisValBucket) return false;
+
 				if (! isLoad(thisBucket, thisValBucket)) return false;
 			}
 		}
