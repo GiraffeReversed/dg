@@ -586,6 +586,24 @@ private:
 		}
 	}
 
+	void setNonEqual(EqualityBucket* ltBucketPtr, EqualityBucket* rtBucketPtr) {
+		
+		if (isNonEqual(ltBucketPtr, rtBucketPtr)) return;
+
+		// assert no conflicting relations
+		assert(! isEqual(ltBucketPtr, rtBucketPtr));
+
+		// TODO? handle lesserEqual specializing to lesser
+
+		auto foundLt = nonEqualities.find(ltBucketPtr);
+		if (foundLt != nonEqualities.end()) foundLt->second.emplace(rtBucketPtr);
+		else nonEqualities.emplace(ltBucketPtr, std::set<EqualityBucket*>{rtBucketPtr});
+
+		auto foundRt = nonEqualities.find(rtBucketPtr);
+		if (foundRt != nonEqualities.end()) foundRt->second.emplace(ltBucketPtr);
+		else nonEqualities.emplace(rtBucketPtr, std::set<EqualityBucket*>{ltBucketPtr});
+	}
+
 	void setLesser(EqualityBucket* ltBucketPtr, EqualityBucket* rtBucketPtr) {
 		if (isLesser(ltBucketPtr, rtBucketPtr)) return;
 
@@ -861,27 +879,9 @@ public:
 	}
 
 	void setNonEqual(T lt, T rt) {
-
-		if (isNonEqual(lt, rt)) return;
-
 		add(lt);
 		add(rt);
-
-		// assert no conflicting relations
-		assert(! isEqual(lt, rt));
-
-		EqualityBucket* ltBucketPtr = mapToBucket.at(lt);
-		EqualityBucket* rtBucketPtr = mapToBucket.at(rt);
-
-		// TODO? handle lesserEqual specializing to lesser
-
-		auto foundLt = nonEqualities.find(ltBucketPtr);
-		if (foundLt != nonEqualities.end()) foundLt->second.emplace(rtBucketPtr);
-		else nonEqualities.emplace(ltBucketPtr, std::set<EqualityBucket*>{rtBucketPtr});
-
-		auto foundRt = nonEqualities.find(rtBucketPtr);
-		if (foundRt != nonEqualities.end()) foundRt->second.emplace(ltBucketPtr);
-		else nonEqualities.emplace(rtBucketPtr, std::set<EqualityBucket*>{ltBucketPtr});
+		setNonEqual(mapToBucket.at(lt), mapToBucket.at(rt));
 	}
 
 	void setLesser(T lt, T rt) {
