@@ -459,7 +459,7 @@ private:
 			|| findByValue(loads, bucket);
 	}
 
-	EqualityBucket* getThisBucket(const ValueRelations& other, EqualityBucket* otherBucket) const {
+	EqualityBucket* getCorrespondingBucket(const ValueRelations& other, EqualityBucket* otherBucket) const {
 		if (! otherBucket->getEqual().empty()) {
 			auto found = mapToBucket.find(otherBucket->getEqual()[0]);
 			if (found != mapToBucket.end())
@@ -471,8 +471,8 @@ private:
 		EqualityBucket* otherFromBucket = findByValue(other.loads, otherBucket);
 		assert(otherFromBucket);
 		assert(! otherFromBucket->getEqual().empty());
-		// if bucket is empty, it surely has to have a nonempty load bucket,
-		// they arent created under different circumstances
+		// if bucket is empty, it surely has a nonempty load bucket,
+		// they aren't created under different circumstances
 
 		T from = otherFromBucket->getEqual()[0];
 		if (hasLoad(from))
@@ -763,13 +763,13 @@ public:
 		for (auto& bucketUniquePtr : other.buckets) {
 
 			EqualityBucket* otherBucket = bucketUniquePtr.get();
-			EqualityBucket* thisBucket = getThisBucket(other, otherBucket);
+			EqualityBucket* thisBucket = getCorrespondingBucket(other, otherBucket);
 			if (! thisBucket) return false;
 
 			for (auto it = otherBucket->begin_down(); it != otherBucket->end_down(); ++it) {
 
 				EqualityBucket* otherRelatedBucket = it->bucket;
-				EqualityBucket* thisRelatedBucket = getThisBucket(other, it->bucket);
+				EqualityBucket* thisRelatedBucket = getCorrespondingBucket(other, it->bucket);
 				if (! thisRelatedBucket) return false;
 				if (! thisRelatedBucket->hasAllEqualitiesFrom(otherRelatedBucket)) return false;
 
@@ -784,7 +784,7 @@ public:
 
 			if (other.hasLoad(otherBucket)) {
 				EqualityBucket* otherValBucket = other.loads.at(otherBucket);
-				EqualityBucket* thisValBucket = getThisBucket(other, otherValBucket);
+				EqualityBucket* thisValBucket = getCorrespondingBucket(other, otherValBucket);
 				if (! thisValBucket) return false;
 				if (! isLoad(thisBucket, thisValBucket)) return false;
 			}
