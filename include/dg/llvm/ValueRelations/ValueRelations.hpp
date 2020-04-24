@@ -284,23 +284,28 @@ public:
 		substitueInSet<EqualityBucket*>(oldToNewPtr, parents);
 	}
 
-	void searchForGreater(std::vector<EqualityBucket*>& acc) {
-		for (EqualityBucket* parentPtr : parents) {
-			if (contains(parentPtr->lesser, this))
-				acc.push_back(parentPtr);
+	std::vector<EqualityBucket*> getDirectlyRelated(bool goDown) {
+		std::vector<EqualityBucket*> result;
 
-			if (contains(parentPtr->lesserEqual, this)) {
-				parentPtr->searchForGreater(acc);
+		for (auto it = (goDown ? begin_down() : begin_up());
+				  it != (goDown ? end_down() : end_up());
+				  ++it) {
+
+			if ((goDown && it->relation == Relation::LT) || (! goDown && it->relation == Relation::GT)) {
+				result.emplace_back(it->bucket);
+				it.getStack().pop();
 			}
 		}
+
+		return result;
 	}
 
-	void searchForLesser(std::vector<EqualityBucket*>& acc) {
-		for (EqualityBucket* lesserPtr : lesser)
-			acc.push_back(lesserPtr);
+	std::vector<EqualityBucket*> getDirectlyLesser() {
+		return getDirectlyRelated(true);
+	}
 
-		for (EqualityBucket* lesserEqualPtr : lesserEqual)
-			lesserEqualPtr->searchForLesser(acc);
+	std::vector<EqualityBucket*> getDirectlyGreater() {
+		return getDirectlyRelated(false);
 	}
 
 	void getRelatedBuckets(std::vector<EqualityBucket*>& acc, bool goDown) {
@@ -1120,11 +1125,10 @@ public:
 		if (! inGraph(val)) return {};
 		EqualityBucket* bucketPtr = mapToBucket.at(val);
 
-		std::vector<EqualityBucket*> acc;
-		bucketPtr->searchForLesser(acc);
+		std::vector<EqualityBucket*> lesserBuckets = bucketPtr->getDirectlyLesser();
 
 		std::vector<T> result;
-		for (EqualityBucket* bucketPtr : acc) {
+		for (EqualityBucket* bucketPtr : lesserBuckets) {
 			if (! bucketPtr->getEqual().empty())
 				result.push_back(bucketPtr->getAny());
 		}
@@ -1135,11 +1139,10 @@ public:
 		if (! inGraph(val)) return {};
 		EqualityBucket* bucketPtr = mapToBucket.at(val);
 
-		std::vector<EqualityBucket*> acc;
-		bucketPtr->searchForGreater(acc);
+		std::vector<EqualityBucket*> greaterBuckets = bucketPtr->getDirectlyGreater();
 
 		std::vector<T> result;
-		for (EqualityBucket* bucketPtr : acc) {
+		for (EqualityBucket* bucketPtr : greaterBuckets) {
 			if (! bucketPtr->getEqual().empty())
 				result.push_back(bucketPtr->getAny());
 		}
