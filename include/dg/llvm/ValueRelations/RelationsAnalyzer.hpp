@@ -24,6 +24,7 @@
 #endif
 
 #include <algorithm>
+#include <string>
 
 #include "GraphElements.hpp"
 #include "ValueRelations.hpp"
@@ -39,6 +40,8 @@ namespace vr {
 
 
 class RelationsAnalyzer {
+
+    const std::set<std::string> safeFunctions = { "__VERIFIER_nondet_int", "__VERIFIER_nondet_char" };
 
     const llvm::Module& module;
 
@@ -100,7 +103,7 @@ class RelationsAnalyzer {
         // handle nondet_int individually just because
         if (auto call = llvm::dyn_cast<llvm::CallInst>(inst)) {
             auto function = call->getCalledFunction();
-            if (function && function->getName().equals("__VERIFIER_nondet_int"))
+            if (function && safeFunctions.find(function->getName()) != safeFunctions.end())
                 return std::set<const llvm::Value*>();
         }
 
