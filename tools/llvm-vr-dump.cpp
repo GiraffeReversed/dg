@@ -107,7 +107,7 @@ int main(int argc, char *argv[])
             for (const auto& loc : block.second->locations) {
                 std::cout << "  NODE" << loc->id;
                 std::cout << "[label=\"";
-                std::cout << "\\n";
+                std::cout << "LOCATION " << loc->id << "\\n";
                 loc->relations.dump();
                 std::cout << "\"];\n";
             }

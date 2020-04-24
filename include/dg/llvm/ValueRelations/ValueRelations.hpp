@@ -1335,7 +1335,6 @@ public:
 
     void generalDump(std::ostream& stream) {
 
-		stream << " THE GRAPH" << std::endl;
 		for (const auto& bucketPtr : buckets) {
 			dump(stream, bucketPtr.get());
 		}
