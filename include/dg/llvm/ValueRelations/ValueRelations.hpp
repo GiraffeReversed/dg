@@ -480,6 +480,38 @@ private:
 		return nullptr;
 	}
 
+	std::vector<BucketPtr> getBucketsToMerge(BucketPtr newBucketPtr, BucketPtr oldBucketPtr) const {
+
+		if (! isLesserEqual(newBucketPtr, oldBucketPtr) && ! isLesserEqual(oldBucketPtr, newBucketPtr))
+			return { newBucketPtr, oldBucketPtr };
+
+		// else handle lesserEqual specializing to equal
+		std::stack<Frame> frames;
+		if (isLesserEqual(newBucketPtr, oldBucketPtr)) {
+			frames = oldBucketPtr->subtreeContains(newBucketPtr, false).first;
+		} else {
+			frames = newBucketPtr->subtreeContains(oldBucketPtr, false).first;
+		}
+
+		// collect buckets in between
+		std::vector<BucketPtr> toMerge;
+		while (! frames.empty()) {
+			BucketPtr bucket = frames.top().bucket;
+			frames.pop();
+
+			toMerge.push_back(bucket);
+
+			// also unset lesserEqual relation
+			if (! frames.empty()) {
+				BucketPtr above = frames.top().bucket;
+				above->lesserEqual.erase(bucket);
+				bucket->parents.erase(above);
+			}
+		}
+
+		return toMerge;
+	}
+
 	void setEqual(EqualityBucket* newBucketPtr, EqualityBucket* oldBucketPtr) {
 
 		if (isEqual(newBucketPtr, oldBucketPtr)) return;
@@ -489,35 +521,7 @@ private:
 		assert(! isLesser(newBucketPtr, oldBucketPtr));
 		assert(! isLesser(newBucketPtr, oldBucketPtr));
 
-		std::vector<BucketPtr> toMerge;
-
-		// handle lesserEqual specializing to equal
-		if (isLesserEqual(newBucketPtr, oldBucketPtr) || isLesserEqual(oldBucketPtr, newBucketPtr)) {
-
-			std::pair<std::stack<Frame>, bool> pair;
-			if (isLesserEqual(newBucketPtr, oldBucketPtr)) {
-				pair = oldBucketPtr->subtreeContains(newBucketPtr, false);
-			} else {
-				pair = newBucketPtr->subtreeContains(oldBucketPtr, false);
-			}
-			std::stack<Frame> frames = pair.first;
-
-			while (! frames.empty()) {
-				Frame frame = frames.top();
-				BucketPtr bucket = frame.bucket;
-				toMerge.push_back(bucket);
-				frames.pop();
-
-				// also unset lesserEqual relation
-				if (! frames.empty()) {
-					BucketPtr above = frames.top().bucket;
-					above->lesserEqual.erase(bucket); bucket->parents.erase(above);
-				}
-			}
-
-		} else {
-			toMerge = { newBucketPtr, oldBucketPtr };
-		}
+		std::vector<BucketPtr> toMerge = getBucketsToMerge(newBucketPtr, oldBucketPtr);
 
 		newBucketPtr = toMerge[0];
 
