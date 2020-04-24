@@ -207,22 +207,19 @@ public:
 		}
 	};
 
-	using iterator = Iterator;
-	using const_iterator = Iterator;
-
-	iterator begin_down() {
+	Iterator begin_down() {
 		return Iterator(this, true, true);
 	}
 
-	iterator end_down() {
+	Iterator end_down() {
 		return Iterator(this, true, false);
 	}
 
-	iterator begin_up() {
+	Iterator begin_up() {
 		return Iterator(this, false, true);
 	}
 
-	iterator end_up() {
+	Iterator end_up() {
 		return Iterator(this, false, false);
 	}
 
@@ -381,7 +378,7 @@ private:
 		Type type = Type::NONE;
 		bool strictOnly = false;
 		EqualityBucket* start;
-		EqualityBucket::iterator it;
+		EqualityBucket::Iterator it;
 		unsigned index;
 		
 		Iterator(EqualityBucket* st, bool s, Type t, bool begin): type(t), strictOnly(s), start(st), index(0) {
