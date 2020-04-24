@@ -131,7 +131,10 @@ public:
 		using difference_type = std::ptrdiff_t;
 
 		std::stack<Frame> stack;
-		std::set<const EqualityBucket*> visited;
+		//std::set<const EqualityBucket*> visited;
+		// unfortunately, there may be multiple paths to given location with different total relation
+		// therefore this cannot be just DFS
+		// I will think about it more...
 		bool goDown = false;
 		
 		Iterator() = default;
@@ -140,7 +143,6 @@ public:
 				stack.push(Frame(start,
 								 goDown ? start->lesserEqual.begin() : start->parents.begin(),
 								 Relation::EQ));
-				visited.insert(start);
 			}
 		}
 
@@ -185,14 +187,10 @@ public:
 			if (! goDown && contains((*frame.it)->lesser, frame.bucket)) frame.relation = Relation::GT;
 
 			// plan visit to successor
-			// TODO fix somehow
-			//if (! contains<const EqualityBucket*>(visited, *frame.it)) {
-				visited.insert(*frame.it);
-				if (goDown)
-					stack.emplace(Frame(*frame.it, (*frame.it)->lesserEqual.begin(), frame.relation));
-				else
-					stack.emplace(Frame(*frame.it, (*frame.it)->parents.begin(), frame.relation));
-			//}
+			if (goDown)
+				stack.emplace(Frame(*frame.it, (*frame.it)->lesserEqual.begin(), frame.relation));
+			else
+				stack.emplace(Frame(*frame.it, (*frame.it)->parents.begin(), frame.relation));
 			return *this;
 		}
 
