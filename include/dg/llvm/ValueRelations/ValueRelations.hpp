@@ -881,6 +881,16 @@ public:
 		setNonEqual(mapToBucket.at(lt), mapToBucket.at(rt));
 	}
 
+	void setNonEqual(T lt, unsigned rt) {
+		add(lt);
+		setNonEqual(mapToBucket.at(lt), placeholderBuckets.at(rt));
+	}
+
+	void setNonEqual(unsigned lt, T rt) {
+		add(rt);
+		setNonEqual(placeholderBuckets.at(lt), mapToBucket.at(rt));
+	}
+
 	void setLesser(T lt, T rt) {
 		add(lt);
 		add(rt);
