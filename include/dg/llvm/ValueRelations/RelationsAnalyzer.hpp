@@ -608,7 +608,7 @@ class RelationsAnalyzer {
         const ValueRelations& treePredGraph = treePred->relations;
 
         if (location->isJustLoopJoin())
-            newGraph.merge(treePredGraph);
+            newGraph.merge(treePredGraph, true);
 
         // simply pass xor relations over tree edge
         newGraph.getCallRelations() = treePredGraph.getCallRelations();
@@ -925,6 +925,9 @@ class RelationsAnalyzer {
                         setSomething = true;
                     }
                     break;
+
+                default:
+                    assert(0 && "other relations do not participate");
             }
         }
 

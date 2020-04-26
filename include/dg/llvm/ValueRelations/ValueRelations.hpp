@@ -89,7 +89,7 @@ class EqualityBucket;
 using BucketPtr = EqualityBucket*;
 using BucketPtrSet = std::set<BucketPtr>;
 
-enum class Relation { EQ, LE, LT, GE, GT };
+enum class Relation { EQ, NE, LE, LT, GE, GT, LOAD };
 
 struct Frame {
 	BucketPtr bucket;
@@ -481,6 +481,89 @@ private:
 		return nullptr;
 	}
 
+	EqualityBucket* getCorrespondingBucketOrNew(const ValueRelations& other, EqualityBucket* otherBucket) {
+		if (! otherBucket->getEqual().empty()) {
+			const auto& equalities = otherBucket->getEqual();
+
+			for (T val : equalities) {
+				auto found = mapToBucket.find(val);
+				if (found != mapToBucket.end()) return found->second;
+			}
+			add(equalities[0]);
+			return mapToBucket.find(equalities[0])->second;
+		}
+
+		// else this is placeholder bucket
+		EqualityBucket* otherFromBucket = findByValue(other.loads, otherBucket);
+		assert(otherFromBucket);
+		assert(! otherFromBucket->getEqual().empty());
+		// if bucket is empty, it surely has a nonempty load bucket,
+		// they aren't created under different circumstances
+
+		for (T from : otherFromBucket->getEqual()) {
+			if (hasLoad(from)) return loads.at(mapToBucket.at(from));
+		}
+		unsigned placeholder = newPlaceholderBucket();
+		setLoad(otherFromBucket->getEqual()[0], placeholder);
+		return placeholderBuckets.at(placeholder);
+	}
+
+	std::vector<std::tuple<EqualityBucket*, EqualityBucket*, Relation>>
+			getExtraRelationsIn(const ValueRelations& other) const {
+		std::vector<std::tuple<EqualityBucket*, EqualityBucket*, Relation>> result;
+
+		for (auto& bucketUniquePtr : other.buckets) {
+
+			EqualityBucket* otherBucket = bucketUniquePtr.get();
+			EqualityBucket* thisBucket = getCorrespondingBucket(other, otherBucket);
+
+			if (! thisBucket || ! thisBucket->hasAllEqualitiesFrom(otherBucket))
+				result.emplace_back(otherBucket, otherBucket, Relation::EQ);
+			
+			// find unrelated comparative buckets
+			for (auto it = otherBucket->begin_down(); it != otherBucket->end_down(); ++it) {
+
+				if (it->relation == Relation::EQ) continue; // already handled prior to loop
+
+				EqualityBucket* otherRelatedBucket = it->bucket;
+				EqualityBucket* thisRelatedBucket = getCorrespondingBucket(other, otherRelatedBucket);
+
+				if (! thisBucket
+				 || ! thisRelatedBucket
+				 || (it->relation == Relation::LT && ! isLesser(thisRelatedBucket, thisBucket))
+				 || (it->relation == Relation::LE && ! isLesserEqual(thisRelatedBucket, thisBucket)))
+					result.emplace_back(otherRelatedBucket, otherBucket, it->relation);
+			}
+
+			// find urelated non-equal buckets
+			auto foundNE = other.nonEqualities.find(otherBucket);
+			if (foundNE != other.nonEqualities.end()) {
+				for (EqualityBucket* otherRelatedBucket : foundNE->second) {
+					EqualityBucket* thisRelatedBucket = getCorrespondingBucket(other, otherRelatedBucket);
+
+					if (! thisBucket
+					 || ! thisRelatedBucket
+					 || ! isNonEqual(thisRelatedBucket, thisBucket))
+						result.emplace_back(otherRelatedBucket, otherBucket, Relation::NE);
+				}
+			}
+
+			// found unrelated load buckets
+			auto foundLoad = other.loads.find(otherBucket);
+			if (foundLoad != other.loads.end()) {
+				EqualityBucket* otherRelatedBucket = foundLoad->second;
+				EqualityBucket* thisRelatedBucket = getCorrespondingBucket(other, otherRelatedBucket);
+
+				if (! thisBucket
+				 || ! thisRelatedBucket
+				 || ! isLoad(thisBucket, thisRelatedBucket))
+				 	result.emplace_back(otherRelatedBucket, otherBucket, Relation::LOAD);
+			}
+		}
+
+		return result;
+	}
+
 	std::vector<BucketPtr> getBucketsToMerge(BucketPtr newBucketPtr, BucketPtr oldBucketPtr) const {
 
 		if (! isLesserEqual(newBucketPtr, oldBucketPtr) && ! isLesserEqual(oldBucketPtr, newBucketPtr))
@@ -779,79 +862,37 @@ public:
 	}
 
 	bool hasAllRelationsFrom(const ValueRelations& other) const {
-		if (nonEqualities != other.nonEqualities || callRelations != other.callRelations) return false;
-
-		// check all relations for all buckets
-		for (auto& bucketUniquePtr : other.buckets) {
-
-			EqualityBucket* otherBucket = bucketUniquePtr.get();
-			EqualityBucket* thisBucket = getCorrespondingBucket(other, otherBucket);
-			if (! thisBucket) return false;
-
-			for (auto it = otherBucket->begin_down(); it != otherBucket->end_down(); ++it) {
-
-				EqualityBucket* otherRelatedBucket = it->bucket;
-				EqualityBucket* thisRelatedBucket = getCorrespondingBucket(other, it->bucket);
-				if (! thisRelatedBucket) return false;
-
-				// check whether corresponding buckets contain the same values
-				if (! thisRelatedBucket->hasAllEqualitiesFrom(otherRelatedBucket)) return false;
-				if (it->relation == Relation::EQ) continue; // nothing else can be done for same bucket
-
-				switch (it->relation) {
-					case Relation::LT: if (! isLesser(thisRelatedBucket, thisBucket))      return false; break;
-					case Relation::LE: if (! isLesserEqual(thisRelatedBucket, thisBucket)) return false; break;
-					default: assert(0 && "going down, not up");
-				}
-			}
-
-			if (other.hasLoad(otherBucket)) {
-				EqualityBucket* otherValBucket = other.loads.at(otherBucket);
-				EqualityBucket* thisValBucket = getCorrespondingBucket(other, otherValBucket);
-				if (! thisValBucket) return false;
-
-				if (! isLoad(thisBucket, thisValBucket)) return false;
-			}
-		}
-		return true;
+		return callRelations == other.callRelations && getExtraRelationsIn(other).empty();
 	}
 
-	void merge(const ValueRelations& other) {
-		// DANGER fogets placeholder buckets
-		std::vector<const llvm::Value*> values = other.getAllValues();
+	void merge(const ValueRelations& other, bool relationsOnly = false) {
+		std::vector<std::tuple<EqualityBucket*, EqualityBucket*, Relation>> missingRelations;
+		missingRelations = getExtraRelationsIn(other);
 
-		for (auto valueIt = values.begin(); valueIt != values.end(); ++valueIt) {
-            const llvm::Value* val = *valueIt;
+		EqualityBucket* otherBucket;
+		EqualityBucket* otherRelatedBucket;
+		Relation relation;
+		for (auto& tuple : missingRelations) {
+			std::tie(otherRelatedBucket, otherBucket, relation) = tuple;
 
-            for (auto it = other.begin_lesserEqual(val);
-                      it != other.end_lesserEqual(val);
-                      ++it) {
-                const llvm::Value* related; Relation relation;
-                std::tie(related, relation) = *it;
+			EqualityBucket* thisBucket = getCorrespondingBucketOrNew(other, otherBucket);
+			EqualityBucket* thisRelatedBucket = getCorrespondingBucketOrNew(other, otherRelatedBucket);
+			assert(thisBucket && thisRelatedBucket);
 
-                if (related == val) continue;
-
-				//auto found = std::find(values.begin(), values.end(), related);
-                switch (relation) {
-                    case Relation::EQ: setEqual(related, val);
-
-						if (true) { // cannot initialize found directly in case
-							auto found = std::find(values.begin(), values.end(), related);
-							if (found != values.end()) {
-								values.erase(found);
-								valueIt = std::find(values.begin(), values.end(), val);
-							}
-						}
-                        break;
-
-                    case Relation::LT: setLesser(related, val); break;
-
-                    case Relation::LE: setLesserEqual(related, val); break;
-
-					default: assert(0 && "going down, not up");
-                }
-            }
-        }
+			switch (relation) {
+				case Relation::EQ:
+					for (T val : otherRelatedBucket->getEqual()) {
+						add(val);
+						setEqual(thisRelatedBucket, mapToBucket.at(val));
+					}
+					break;
+				case Relation::NE: setNonEqual(thisRelatedBucket, thisBucket); break;
+				case Relation::LT: setLesser(thisRelatedBucket, thisBucket); break;
+				case Relation::LE: setLesserEqual(thisRelatedBucket, thisBucket); break;
+				case Relation::LOAD: if (! relationsOnly) setLoad(thisBucket, thisRelatedBucket); break;
+				default: assert(0 && "GE and GT cannot occurr");
+			}
+		}
 	}
 
 	void add(T val) {
