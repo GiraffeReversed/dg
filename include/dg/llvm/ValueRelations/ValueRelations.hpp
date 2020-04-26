@@ -689,8 +689,8 @@ private:
 		if (isLesserEqual(ltBucketPtr, rtBucketPtr)) {
 			if (contains<EqualityBucket*>(rtBucketPtr->lesserEqual, ltBucketPtr))
 				rtBucketPtr->lesserEqual.erase(ltBucketPtr);
-			else
-				assert(0); // more buckets in between, can't decide this
+			//else
+			//	assert(0); // more buckets in between, can't decide this
 		}
 
 		rtBucketPtr->lesser.insert(ltBucketPtr);
