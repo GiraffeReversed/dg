@@ -299,14 +299,6 @@ class EqualityBucket {
 		return result;
 	}
 
-	std::vector<EqualityBucket*> getDirectlyLesser() {
-		return getDirectlyRelated(true);
-	}
-
-	std::vector<EqualityBucket*> getDirectlyGreater() {
-		return getDirectlyRelated(false);
-	}
-
 	std::vector<T>& getEqual() {
 		return equalities;
 	}
@@ -798,6 +790,20 @@ private:
 		}
 		return highest;
 	}
+
+	std::vector<T> getDirectlyRelated(T val, bool goDown) const {
+		if (! inGraph(val)) return {};
+		EqualityBucket* bucketPtr = mapToBucket.at(val);
+
+		std::vector<EqualityBucket*> relatedBuckets = bucketPtr->getDirectlyRelated(goDown);
+
+		std::vector<T> result;
+		for (EqualityBucket* bucketPtr : relatedBuckets) {
+			if (! bucketPtr->getEqual().empty())
+				result.emplace_back(bucketPtr->getAny());
+		}
+		return result;
+	}
 	
 public:
 
@@ -1171,32 +1177,12 @@ public:
 		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::ALL, false);
 	}
 
-	std::vector<T> getSampleLesser(T val) const {
-		if (! inGraph(val)) return {};
-		EqualityBucket* bucketPtr = mapToBucket.at(val);
-
-		std::vector<EqualityBucket*> lesserBuckets = bucketPtr->getDirectlyLesser();
-
-		std::vector<T> result;
-		for (EqualityBucket* bucketPtr : lesserBuckets) {
-			if (! bucketPtr->getEqual().empty())
-				result.push_back(bucketPtr->getAny());
-		}
-		return result;
+	std::vector<T> getDirectlyLesser(T val) const {
+		return getDirectlyRelated(val, true);
 	}
 
-	std::vector<T> getSampleGreater(T val) const {
-		if (! inGraph(val)) return {};
-		EqualityBucket* bucketPtr = mapToBucket.at(val);
-
-		std::vector<EqualityBucket*> greaterBuckets = bucketPtr->getDirectlyGreater();
-
-		std::vector<T> result;
-		for (EqualityBucket* bucketPtr : greaterBuckets) {
-			if (! bucketPtr->getEqual().empty())
-				result.push_back(bucketPtr->getAny());
-		}
-		return result;
+	std::vector<T> getDirectlyGreater(T val) const {
+		return getDirectlyRelated(val, false);
 	}
 
 	std::vector<T> getAllRelated(T val) const {

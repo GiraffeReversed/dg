@@ -367,7 +367,7 @@ class RelationsAnalyzer {
                        bool getLesser) {
 
         std::vector<const llvm::Value*> sample = getLesser ?
-                    graph.getSampleLesser(param) : graph.getSampleGreater(param);
+                    graph.getDirectlyLesser(param) : graph.getDirectlyGreater(param);
 
         for (const llvm::Value* value : sample)
             if (getLesser) graph.setLesserEqual(value, op);
