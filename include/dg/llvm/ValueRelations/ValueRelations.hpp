@@ -1027,10 +1027,20 @@ public:
 		} else {
 			// overconnect parents to children
 			for (EqualityBucket* parent : valBucketPtr->parents) {
-				parent->lesserEqual.insert(valBucketPtr->lesserEqual.begin(),
-										   valBucketPtr->lesserEqual.end());
-				parent->lesser.insert(valBucketPtr->lesser.begin(),
-									  valBucketPtr->lesser.end());
+
+				for (EqualityBucket* lesser : valBucketPtr->lesser) {
+					parent->lesser.emplace(lesser);
+					lesser->parents.emplace(parent);
+				}
+
+				for (EqualityBucket* lesserEqual : valBucketPtr->lesserEqual) {
+
+					if (parent->lesserEqual.find(valBucketPtr) != parent->lesserEqual.end())
+						parent->lesserEqual.emplace(lesserEqual);
+					else
+						parent->lesser.emplace(lesserEqual);
+					lesserEqual->parents.emplace(parent);
+				}
 			}
 
 			// it severes all ties with the rest of the graph
