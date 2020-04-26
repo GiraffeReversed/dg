@@ -235,7 +235,7 @@ class EqualityBucket {
 		return { std::stack<Frame>(), false };
 	}
 
-	void merge(const EqualityBucket& other) {
+	void mergeConnections(const EqualityBucket& other) {
 		// set_union does't work in place
 		lesserEqual.insert(other.lesserEqual.begin(), other.lesserEqual.end());
 		for (EqualityBucket* bucketPtr : other.lesserEqual)
@@ -642,7 +642,7 @@ private:
 			}
 
 			// make successors and parents of right belong to left too
-			newBucketPtr->merge(*oldBucketPtr);
+			newBucketPtr->mergeConnections(*oldBucketPtr);
 
 			// make successors and parents of right forget it
 			oldBucketPtr->disconnectAll();
@@ -1013,12 +1013,12 @@ public:
 		
 		for (auto it = buckets.begin(); it != buckets.end(); ) {
 			if (! hasRelations(it->get())) {
-				if (! it->get()->getEqual().empty()) {
-					T val = it->get()->getAny();
-					mapToBucket.erase(val);
-				}
+				if (! (*it)->getEqual().empty())
+					mapToBucket.erase((*it)->getAny());
+
 				it = buckets.erase(it);
-			} else ++it;
+			} else
+				++it;
 		}
     }
 
@@ -1170,6 +1170,7 @@ public:
 	}
 
 	ValueIterator begin_all(T val) const {
+		// TODO add non-equal values
 		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::ALL, true);
 	}
 
@@ -1243,20 +1244,6 @@ public:
 		return callRelations;
 	}
 
-	void addXorRelation(const CallRelation& relation) {
-		callRelations.emplace_back(relation);
-	}
-
-	void makePlaceholder(T val) {
-		if (! contains(mapToBucket, val)) return;
-
-		EqualityBucket* bucket = mapToBucket.at(val);
-
-		for (T value : bucket->getEqual())
-			mapToBucket.erase(value);
-		bucket->getEqual().clear();
-	}
-
 	unsigned newPlaceholderBucket() {
 		EqualityBucket* bucket = new EqualityBucket;
 		buckets.emplace_back(bucket);
@@ -1265,7 +1252,7 @@ public:
 	}
 
 	void erasePlaceholderBucket(unsigned id) {
-		// DANGER erases placeholder bucket for good, not just
+		// DANGER erases bucket for good, not just
 		// the mention in placeholderBuckets
 		EqualityBucket* bucket = placeholderBuckets.at(id);
 		
@@ -1316,30 +1303,22 @@ public:
 	}
 
 	void ddump() {
-		//std::cerr << "debug dumping graph" << std::endl;
 		generalDump(std::cerr);
-		std::cerr << std::endl;
 	}
 
 	void ddump(EqualityBucket* bucket) {
-		//std::cerr << "debug dumping bucket" << std::endl;
 		dump(std::cerr, bucket);
-		//std::cerr << std::endl;
 	}
 
 	void ddump(const llvm::Value* val) {
-		if (! inGraph(val)) {
-			std::cerr << "NIG" << debug::getValName(val) << std::endl << std::endl;
-			return;
-		}
+		if (! inGraph(val)) return;
+
 		std::cerr << debug::getValName(val) << ":" << std::endl;
 		dump(std::cerr, mapToBucket.at(val));
 		std::cerr << std::endl;
 	}
 
 	void dump(std::ostream& stream, EqualityBucket* bucket) {
-		//const auto& values = bucket->getEqual();
-
 		for (auto ptr : bucket->lesser)
 			printInterleaved(stream, ptr, " < ", bucket);
 
@@ -1352,10 +1331,6 @@ public:
 				if (nonEqual < bucket)
 					printInterleaved(stream, nonEqual, " != ", bucket);
 		}
-
-		//EqualityBucket* foundKey = findByValue(loads, bucket);
-		//if (foundKey)
-		//	printInterleaved(stream, values, " = LOAD ", getEqual(foundKey));
 
 		EqualityBucket* foundValue = findByKey(loads, bucket);
 		if (foundValue)
