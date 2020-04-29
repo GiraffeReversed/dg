@@ -440,14 +440,14 @@ private:
 		return contains(mapToBucket, val);
 	}
 
-	bool hasRelations(EqualityBucket* bucket) const {
+	bool hasComparativeRelations(EqualityBucket* bucket) const {
 		return bucket->getEqual().size() > 1
 			|| ++bucket->begin_down() != bucket->end_down()
 			|| ++bucket->begin_up()   != bucket->end_up();
 	}
 
-	bool hasRelationsOrLoads(EqualityBucket* bucket) const {
-		return hasRelations(bucket)
+	bool hasComparativeRelationsOrLoads(EqualityBucket* bucket) const {
+		return hasComparativeRelations(bucket)
 			|| findByKey(loads, bucket)
 			|| findByValue(loads, bucket);
 	}
@@ -995,14 +995,14 @@ public:
 
 		loads.erase(fromBucketPtr);
 
-		if (! hasRelationsOrLoads(valBucketPtr)) {
+		if (! hasComparativeRelationsOrLoads(valBucketPtr)) {
 			if (! valBucketPtr->getEqual().empty()) {
 				T val = valBucketPtr->getAny();
 				mapToBucket.erase(val);
 			}
 			eraseUniquePtr(buckets, valBucketPtr);
 		}
-		if (! hasRelationsOrLoads(fromBucketPtr)) {
+		if (! hasComparativeRelationsOrLoads(fromBucketPtr)) {
 			mapToBucket.erase(from);
 			eraseUniquePtr(buckets, fromBucketPtr);
 		}
@@ -1012,7 +1012,7 @@ public:
         loads.clear();
 		
 		for (auto it = buckets.begin(); it != buckets.end(); ) {
-			if (! hasRelations(it->get())) {
+			if (! hasComparativeRelations(it->get())) {
 				if (! (*it)->getEqual().empty())
 					mapToBucket.erase((*it)->getAny());
 
@@ -1242,6 +1242,13 @@ public:
 
 	std::vector<CallRelation>& getCallRelations() {
 		return callRelations;
+	}
+
+	bool hasComparativeRelations(unsigned placeholder) {
+		if (placeholderBuckets.find(placeholder) == placeholderBuckets.end())
+			return false;
+		
+		return hasComparativeRelations(placeholderBuckets.at(placeholder));
 	}
 
 	unsigned newPlaceholderBucket() {

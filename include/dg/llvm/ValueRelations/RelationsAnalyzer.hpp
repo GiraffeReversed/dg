@@ -776,19 +776,15 @@ class RelationsAnalyzer {
                         = outloopPred->relations.getValsByPtr(from);
                     if (valsOutloop.empty()) continue;
 
-                    bool setSomething = false;
                     unsigned placeholder = newGraph.newPlaceholderBucket();
 
-                    if (inloopPred->relations.isLesser(firstLoadInLoop, valInloop)) {
+                    if (inloopPred->relations.isLesser(firstLoadInLoop, valInloop))
                         newGraph.setLesserEqual(valsOutloop[0], placeholder);
-                        setSomething = true;
-                    }
-                    if (inloopPred->relations.isLesser(valInloop, firstLoadInLoop)) {
+                        
+                    if (inloopPred->relations.isLesser(valInloop, firstLoadInLoop))
                         newGraph.setLesserEqual(placeholder, valsOutloop[0]);
-                        setSomething = true;
-                    }
 
-                    if (setSomething) {
+                    if (newGraph.hasComparativeRelations(placeholder)) {
                         newGraph.setLoad(from, placeholder);
 
                         for (const llvm::Value* val : valsOutloop) {
@@ -800,9 +796,6 @@ class RelationsAnalyzer {
                 }
             }
         }
-
-        //for (const llvm::Value* from : froms)
-        //    intersectByLoad(preds, from, newGraph);
 
         if (location->isJustLoopJoin()) {
             VRLocation* treePred = getTreePred(location);
@@ -861,13 +854,9 @@ class RelationsAnalyzer {
             if (! bound || value->getValue().slt(bound->getValue())) bound = value;
         }
 
-        bool setSomething = false;
         unsigned placeholder = newGraph.newPlaceholderBucket();
 
-        if (bound) {
-            newGraph.setLesserEqual(bound, placeholder);
-            setSomething = true;
-        }
+        if (bound) newGraph.setLesserEqual(bound, placeholder);
 
         const llvm::Value* loaded = preds[0]->relations.getValsByPtr(from)[0];
 
@@ -880,50 +869,45 @@ class RelationsAnalyzer {
             if (related == loaded) continue;
             switch (relation) {
                 case Relation::EQ:
-                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isEqual, false)) {
+                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isEqual, false))
                         newGraph.setEqual(related, placeholder);
-                        setSomething = true;
-                    } else if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, false)) {
+                    
+                    else if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, false))
                         newGraph.setLesserEqual(related, placeholder);
-                        setSomething = true;
-                    } else if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, true)) {
+
+                    else if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, true))
                         newGraph.setLesserEqual(placeholder, related);
-                        setSomething = true;
-                    }
+
                     break;
 
                 case Relation::LT:
-                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesser, false)) {
+                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesser, false))
                         newGraph.setLesser(related, placeholder);
-                        setSomething = true;
-                    } else if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, false)) {
+                    
+                    else if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, false))
                         newGraph.setLesserEqual(related, placeholder);
-                        setSomething = true;
-                    }
+
                     break;
                 
                 case Relation::LE:
-                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, false)) {
+                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, false))
                         newGraph.setLesserEqual(related, placeholder);
-                        setSomething = true;
-                    }
+
                     break;
                 
                 case Relation::GT:
-                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesser, true)) {
+                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesser, true))
                         newGraph.setLesser(placeholder, related);
-                        setSomething = true;
-                    } else if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, true)) {
+
+                    else if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, true))
                         newGraph.setLesserEqual(placeholder, related);
-                        setSomething = true;
-                    }
+
                     break;
 
                 case Relation::GE:
-                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, true)) {
+                    if (relatesByLoadInAll(preds, related, from, &ValueRelations::isLesserEqual, true))
                         newGraph.setLesserEqual(placeholder, related);
-                        setSomething = true;
-                    }
+
                     break;
 
                 default:
@@ -931,11 +915,8 @@ class RelationsAnalyzer {
             }
         }
 
-        if (setSomething) {
-            newGraph.setLoad(from, placeholder);
-        } else {
-            newGraph.erasePlaceholderBucket(placeholder);
-        }
+        if (newGraph.hasComparativeRelations(placeholder)) newGraph.setLoad(from, placeholder);
+        else newGraph.erasePlaceholderBucket(placeholder);
     }
 
     bool andSwapIfChanged(ValueRelations& oldGraph, ValueRelations& newGraph) {
