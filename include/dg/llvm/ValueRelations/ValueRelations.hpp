@@ -773,6 +773,61 @@ private:
 		return found != loads.end() && valBucketPtr == found->second;
 	}
 
+	void eraseBucketIfUnrelated(EqualityBucket* bucket) {
+		if (hasComparativeRelationsOrLoads(bucket)) return;
+
+		for (auto& pair : mapToBucket) {
+			if (pair.second == bucket) {
+				mapToBucket.erase(pair.first);
+				break;
+			}
+		}
+
+		eraseUniquePtr(buckets, bucket);
+	}
+
+	void unsetComparativeRelations(EqualityBucket* valBucketPtr) {
+		// save related buckets to check later
+		BucketPtrSet allRelated;
+		allRelated.insert(valBucketPtr->parents.begin(), valBucketPtr->parents.end());
+		allRelated.insert(valBucketPtr->lesser.begin(), valBucketPtr->lesser.end());
+		allRelated.insert(valBucketPtr->lesserEqual.begin(), valBucketPtr->lesserEqual.end());
+
+		auto found = nonEqualities.find(valBucketPtr);
+		if (found != nonEqualities.end())
+			allRelated.insert(found->second.begin(), found->second.end());
+
+		// overconnect parents to children
+		for (EqualityBucket* parent : valBucketPtr->parents) {
+
+			for (EqualityBucket* lesser : valBucketPtr->lesser) {
+				parent->lesser.emplace(lesser);
+				lesser->parents.emplace(parent);
+			}
+
+			for (EqualityBucket* lesserEqual : valBucketPtr->lesserEqual) {
+
+				if (parent->lesserEqual.find(valBucketPtr) != parent->lesserEqual.end())
+					parent->lesserEqual.emplace(lesserEqual);
+				else
+					parent->lesser.emplace(lesserEqual);
+				lesserEqual->parents.emplace(parent);
+			}
+		}
+
+		nonEqualities.erase(valBucketPtr);
+		for (auto& pair : nonEqualities) {
+			pair.second.erase(valBucketPtr);
+		}
+
+		// it severes all ties with the rest of the graph
+		valBucketPtr->disconnectAll();
+
+		// remove buckets that lost their only relation
+		for (EqualityBucket* bucket : allRelated)
+			eraseBucketIfUnrelated(bucket);
+	}
+
 	bool hasLoad(EqualityBucket* fromBucketPtr) const {
 		return loads.find(fromBucketPtr) != loads.end();
 	}
@@ -996,6 +1051,14 @@ public:
 
 		loads.erase(fromBucketPtr);
 
+		for (auto& pair : placeholderBuckets) {
+			if (pair.second == valBucketPtr) {
+				unsetComparativeRelations(valBucketPtr);
+				placeholderBuckets.erase(pair.first);
+				break;
+			}
+		}
+
 		if (! hasComparativeRelationsOrLoads(valBucketPtr)) {
 			if (! valBucketPtr->getEqual().empty()) {
 				T val = valBucketPtr->getAny();
@@ -1023,41 +1086,17 @@ public:
 		}
     }
 
-	void unsetRelations(T val) {
-		EqualityBucket* valBucketPtr = mapToBucket.at(val);
+	void unsetComparativeRelations(T val) {
+		if (! inGraph(val)) return;
 
+		EqualityBucket* valBucketPtr = mapToBucket.at(val);
 		bool onlyReference = valBucketPtr->getEqual().size() == 1;
 		if (! onlyReference) {
 			// val moves to its own equality bucket
 			mapToBucket.erase(val);
 			add(val);
-		} else {
-			// overconnect parents to children
-			for (EqualityBucket* parent : valBucketPtr->parents) {
-
-				for (EqualityBucket* lesser : valBucketPtr->lesser) {
-					parent->lesser.emplace(lesser);
-					lesser->parents.emplace(parent);
-				}
-
-				for (EqualityBucket* lesserEqual : valBucketPtr->lesserEqual) {
-
-					if (parent->lesserEqual.find(valBucketPtr) != parent->lesserEqual.end())
-						parent->lesserEqual.emplace(lesserEqual);
-					else
-						parent->lesser.emplace(lesserEqual);
-					lesserEqual->parents.emplace(parent);
-				}
-			}
-
-			// it severes all ties with the rest of the graph
-			valBucketPtr->disconnectAll();
-		}
-
-		nonEqualities.erase(valBucketPtr);
-		for (auto& pair : nonEqualities) {
-			pair.second.erase(valBucketPtr);
-		}
+		} else
+			unsetComparativeRelations(valBucketPtr);
 	}
 
 	bool isEqual(T lt, T rt) const {
