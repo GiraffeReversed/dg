@@ -442,6 +442,7 @@ private:
 
 	bool hasComparativeRelations(EqualityBucket* bucket) const {
 		return bucket->getEqual().size() > 1
+			|| nonEqualities.find(bucket) != nonEqualities.end()
 			|| ++bucket->begin_down() != bucket->end_down()
 			|| ++bucket->begin_up()   != bucket->end_up();
 	}
