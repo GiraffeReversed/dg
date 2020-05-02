@@ -919,7 +919,7 @@ class RelationsAnalyzer {
     }
 
     bool andSwapIfChanged(ValueRelations& oldGraph, ValueRelations& newGraph) {
-        if (oldGraph.hasAllRelationsFrom(newGraph))
+        if (oldGraph.hasAllRelationsFrom(newGraph) && newGraph.hasAllRelationsFrom(oldGraph))
             return false;
             
         swap(oldGraph, newGraph);
