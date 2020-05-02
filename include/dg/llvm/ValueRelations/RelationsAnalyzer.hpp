@@ -100,7 +100,6 @@ class RelationsAnalyzer {
             }
         }
 
-        // handle nondet_int individually just because
         if (auto call = llvm::dyn_cast<llvm::CallInst>(inst)) {
             auto function = call->getCalledFunction();
             if (function && safeFunctions.find(function->getName()) != safeFunctions.end())
