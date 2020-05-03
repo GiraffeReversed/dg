@@ -466,16 +466,14 @@ class RelationsAnalyzer {
 
         switch (pred) {
             case llvm::ICmpInst::Predicate::ICMP_EQ:
-                if (! newGraph.isNonEqual(op1, op2)
-                 && ! newGraph.isLesser(op1, op2)
-                 && ! newGraph.isLesser(op2, op1)) {
+                if (! newGraph.hasConflictingRelation(op1, op2, Relation::EQ)) {
                     newGraph.setEqual(op1, op2);
                     return;
                 }
                 break;
 
             case llvm::ICmpInst::Predicate::ICMP_NE:
-                if (! newGraph.isEqual(op1, op2)) {
+                if (! newGraph.hasConflictingRelation(op1, op2, Relation::NE)) {
                     newGraph.setNonEqual(op1, op2);
                     return;
                 }
@@ -483,7 +481,7 @@ class RelationsAnalyzer {
 
             case llvm::ICmpInst::Predicate::ICMP_ULE:
             case llvm::ICmpInst::Predicate::ICMP_SLE:
-                if (! newGraph.isLesser(op2, op1)) {
+                if (! newGraph.hasConflictingRelation(op1, op2, Relation::LE)) {
                     newGraph.setLesserEqual(op1, op2);
                     return;
                 }
@@ -491,7 +489,7 @@ class RelationsAnalyzer {
 
             case llvm::ICmpInst::Predicate::ICMP_ULT:
             case llvm::ICmpInst::Predicate::ICMP_SLT:
-                if (! newGraph.isLesserEqual(op2, op1)) {
+                if (! newGraph.hasConflictingRelation(op1, op2, Relation::LT)) {
                     newGraph.setLesser(op1, op2);
                     return;
                 }
@@ -499,7 +497,7 @@ class RelationsAnalyzer {
 
             case llvm::ICmpInst::Predicate::ICMP_UGE:
             case llvm::ICmpInst::Predicate::ICMP_SGE:
-                if (! newGraph.isLesser(op1, op2)) {
+                if (! newGraph.hasConflictingRelation(op1, op2, Relation::GE)) {
                     newGraph.setLesserEqual(op2, op1);
                     return;
                 }
@@ -507,7 +505,7 @@ class RelationsAnalyzer {
 
             case llvm::ICmpInst::Predicate::ICMP_UGT:
             case llvm::ICmpInst::Predicate::ICMP_SGT:
-                if (! newGraph.isLesserEqual(op1, op2)) {
+                if (! newGraph.hasConflictingRelation(op1, op2, Relation::GT)) {
                     newGraph.setLesser(op2, op1);
                     return;
                 }

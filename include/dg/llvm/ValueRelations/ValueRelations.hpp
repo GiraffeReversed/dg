@@ -91,6 +91,20 @@ using BucketPtrSet = std::set<BucketPtr>;
 
 enum class Relation { EQ, NE, LE, LT, GE, GT, LOAD };
 
+#ifndef NDEBUG
+void dumpRelation(Relation r) {
+	switch(r) {
+		case Relation::EQ: std::cerr << "EQ"; break;
+		case Relation::NE: std::cerr << "NE"; break;
+		case Relation::LE: std::cerr << "LE"; break;
+		case Relation::LT: std::cerr << "LT"; break;
+		case Relation::GE: std::cerr << "GE"; break;
+		case Relation::GT: std::cerr << "GT"; break;
+		case Relation::LOAD: std::cerr << "LOAD"; break;
+	}
+}
+#endif
+
 class EqualityBucket {
 
 	using T = const llvm::Value*;
@@ -687,10 +701,7 @@ private:
 
 		if (isEqual(newBucketPtr, oldBucketPtr)) return;
 
-		// assert no conflicting relations
-		assert(! isNonEqual(newBucketPtr, oldBucketPtr));
-		assert(! isLesser(newBucketPtr, oldBucketPtr));
-		assert(! isLesser(newBucketPtr, oldBucketPtr));
+		assert(! hasConflictingRelation(newBucketPtr, oldBucketPtr, Relation::EQ));
 
 		std::vector<BucketPtr> toMerge = getBucketsToMerge(newBucketPtr, oldBucketPtr);
 
@@ -760,8 +771,7 @@ private:
 		
 		if (isNonEqual(ltBucketPtr, rtBucketPtr)) return;
 
-		// assert no conflicting relations
-		assert(! isEqual(ltBucketPtr, rtBucketPtr));
+		assert(! hasConflictingRelation(ltBucketPtr, rtBucketPtr, Relation::NE));
 
 		// TODO? handle lesserEqual specializing to lesser
 
@@ -777,10 +787,7 @@ private:
 	void setLesser(EqualityBucket* ltBucketPtr, EqualityBucket* rtBucketPtr) {
 		if (isLesser(ltBucketPtr, rtBucketPtr)) return;
 
-		// assert no conflicting relations
-		assert(! isEqual(ltBucketPtr, rtBucketPtr));
-		assert(! isLesserEqual(rtBucketPtr, ltBucketPtr));
-		assert(! isLesser(rtBucketPtr, ltBucketPtr));
+		assert(! hasConflictingRelation(ltBucketPtr, rtBucketPtr, Relation::LT));
 
 		if (isLesserEqual(ltBucketPtr, rtBucketPtr)) {
 			if (contains<EqualityBucket*>(rtBucketPtr->lesserEqual, ltBucketPtr))
@@ -798,8 +805,7 @@ private:
 		if (isNonEqual(ltBucketPtr, rtBucketPtr))
 			return setLesser(ltBucketPtr, rtBucketPtr);
 
-		// assert no conflicting relations
-		assert(! isLesser(rtBucketPtr, ltBucketPtr));
+		assert(! hasConflictingRelation(ltBucketPtr, rtBucketPtr, Relation::LE));
 
 		// infer values being equal
 		if (isLesserEqual(rtBucketPtr, ltBucketPtr))
@@ -863,9 +869,46 @@ private:
 		return ltConst && rtBound && ltConst->getValue().sle(rtBound->getValue());
 	}
 
+	// in case of LOAD, rt is the from and lt is val
+	bool hasConflictingRelation(
+			EqualityBucket* ltBucketPtr,
+			EqualityBucket* rtBucketPtr,
+			Relation relation) const {
+		switch (relation) {
+			case Relation::EQ:
+				return isNonEqual(ltBucketPtr, rtBucketPtr)
+					|| isLesser(ltBucketPtr, rtBucketPtr)
+					|| isLesser(rtBucketPtr, ltBucketPtr);
+
+			case Relation::NE:
+				return isEqual(ltBucketPtr, rtBucketPtr);
+
+			case Relation::LT:
+				return isLesserEqual(rtBucketPtr, ltBucketPtr);
+
+			case Relation::LE:
+				return isLesser(rtBucketPtr, ltBucketPtr);
+
+			case Relation::GT:
+				return hasConflictingRelation(rtBucketPtr, ltBucketPtr, Relation::LT);
+
+			case Relation::GE:
+				return hasConflictingRelation(rtBucketPtr, ltBucketPtr, Relation::LE);
+
+			case Relation::LOAD:
+				return hasLoad(rtBucketPtr)
+					&& hasConflictingRelation(ltBucketPtr, loads.at(rtBucketPtr), Relation::EQ);
+		}
+		assert(0 && "unreachable");
+	}
+
 	bool isLoad(EqualityBucket* fromBucketPtr, EqualityBucket* valBucketPtr) const {
 		auto found = loads.find(fromBucketPtr);
 		return found != loads.end() && valBucketPtr == found->second;
+	}
+
+	bool hasLoad(EqualityBucket* fromBucketPtr) const {
+		return loads.find(fromBucketPtr) != loads.end();
 	}
 
 	void eraseBucketIfUnrelated(EqualityBucket* bucket) {
@@ -921,10 +964,6 @@ private:
 		// remove buckets that lost their only relation
 		for (EqualityBucket* bucket : allRelated)
 			eraseBucketIfUnrelated(bucket);
-	}
-
-	bool hasLoad(EqualityBucket* fromBucketPtr) const {
-		return loads.find(fromBucketPtr) != loads.end();
 	}
 
 	C getLesserEqualBound(EqualityBucket* bucket) const {
@@ -1022,7 +1061,9 @@ public:
 		return callRelations == other.callRelations && getExtraRelationsIn(other).empty();
 	}
 
-	void merge(const ValueRelations& other, bool relationsOnly = false) {
+	bool merge(const ValueRelations& other, bool relationsOnly = false) {
+		ValueRelations original = *this;
+
 		std::vector<std::tuple<EqualityBucket*, EqualityBucket*, Relation>> missingRelations;
 		missingRelations = getExtraRelationsIn(other);
 
@@ -1036,9 +1077,18 @@ public:
 			EqualityBucket* thisRelatedBucket = getCorrespondingBucketOrNew(other, otherRelatedBucket);
 			assert(thisBucket && thisRelatedBucket);
 
+			if (hasConflictingRelation(thisRelatedBucket, thisBucket, relation)) {
+				swap(*this, original);
+				return false;
+			}
+
 			switch (relation) {
 				case Relation::EQ:
 					for (T val : otherRelatedBucket->getEqual()) {
+						if (hasConflictingRelation(val, otherRelatedBucket->getEqual()[0], Relation::EQ)) {
+							swap(*this, original);
+							return false;
+						}
 						add(val);
 						setEqual(thisRelatedBucket, mapToBucket.at(val));
 					}
@@ -1050,6 +1100,8 @@ public:
 				default: assert(0 && "GE and GT cannot occurr");
 			}
 		}
+
+		return true;
 	}
 
 	void add(T val) {
@@ -1245,6 +1297,35 @@ public:
 		}
 
 		return false;
+	}
+
+	bool hasConflictingRelation(T lt, T rt, Relation relation) const {
+		switch (relation) {
+			case Relation::EQ:
+				return isNonEqual(lt, rt)
+					|| isLesser(lt, rt)
+					|| isLesser(rt, lt);
+
+			case Relation::NE:
+				return isEqual(lt, rt);
+
+			case Relation::LT:
+				return isLesserEqual(rt, lt);
+
+			case Relation::LE:
+				return isLesser(rt, lt);
+
+			case Relation::GT:
+				return hasConflictingRelation(rt, lt, Relation::LT);
+
+			case Relation::GE:
+				return hasConflictingRelation(rt, lt, Relation::LE);
+
+			case Relation::LOAD:
+				return hasLoad(rt) && inGraph(lt)
+					&& hasConflictingRelation(mapToBucket.at(lt), loads.at(mapToBucket.at(rt)), Relation::EQ);
+		}
+		assert(0 && "unreachable");
 	}
 
 	bool isLoad(T from, T val) const {
