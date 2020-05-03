@@ -1489,7 +1489,7 @@ public:
 		}
 	}
 
-    void generalDump(std::ostream& stream) {
+    void generalDump(std::ostream& stream, bool printCallRelations=true) {
 
 		for (const auto& bucketPtr : buckets) {
 			dump(stream, bucketPtr.get());
@@ -1501,7 +1501,8 @@ public:
 				stream << "{ " << strip(debug::getValName(equalPair.first)) << "; "
 							   << strip(debug::getValName(equalPair.second))
 					   << " }" << std::endl;
-			callRelation.callSiteRelations->generalDump(stream);
+			if (printCallRelations)
+				callRelation.callSiteRelations->generalDump(stream, false);
 		}
 
     }
