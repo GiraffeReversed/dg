@@ -728,7 +728,8 @@ private:
 			// replace load info to regard only remaining bucket
 			for (auto pairIt = loads.begin(); pairIt != loads.end(); ++pairIt) {
 				if (pairIt->first == oldBucketPtr) {
-					loads.emplace(newBucketPtr, pairIt->second);
+					loads.emplace(newBucketPtr,
+								  pairIt->second == oldBucketPtr ? newBucketPtr : pairIt->second); // in case x = load x
 					pairIt = loads.erase(pairIt);
 				}
 
