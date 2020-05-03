@@ -113,22 +113,23 @@ class StructureAnalyzer {
             std::vector<VREdge*>& predEdges = location->predecessors;
             if (location->isJustLoopJoin()) {
 
-                // remove all tree edges, so that backwarReach would
+                // remove the incoming tree edge, so that backwardReach would
                 // really go only backwards
-                std::vector<VREdge*> treeEdges;
+                VREdge* treePred = nullptr;
                 for (auto it = predEdges.begin(); it != predEdges.end(); ++it) {
                     if ((*it)->type == EdgeType::TREE) {
-                        treeEdges.emplace_back(*it);
+                        treePred = *it;
                         predEdges.erase(it);
+                        break;
                     }
                 }
+                assert(treePred); // every join has to have exactly one tree predecessor
                 
                 auto forwardReach = genericReach(location, true);
                 auto backwardReach = genericReach(location, false);
 
-                // put tree edges back in
-                for (VREdge* predEdge : treeEdges)
-                    predEdges.emplace_back(predEdge);
+                // put the tree edge back in
+                predEdges.emplace_back(treePred);
 
                 auto inloopValuesIt = inloopValues.emplace(location,
                                 std::vector<const llvm::Instruction*>()).first;
