@@ -466,26 +466,52 @@ class RelationsAnalyzer {
 
         switch (pred) {
             case llvm::ICmpInst::Predicate::ICMP_EQ:
-                newGraph.setEqual(op1, op2); break;
+                if (! newGraph.isNonEqual(op1, op2)
+                 && ! newGraph.isLesser(op1, op2)
+                 && ! newGraph.isLesser(op2, op1)) {
+                    newGraph.setEqual(op1, op2);
+                    return;
+                }
+                break;
 
             case llvm::ICmpInst::Predicate::ICMP_NE:
-                newGraph.setNonEqual(op1, op2); break;
+                if (! newGraph.isEqual(op1, op2)) {
+                    newGraph.setNonEqual(op1, op2);
+                    return;
+                }
+                break;
 
             case llvm::ICmpInst::Predicate::ICMP_ULE:
             case llvm::ICmpInst::Predicate::ICMP_SLE:
-                newGraph.setLesserEqual(op1, op2); break;
+                if (! newGraph.isLesser(op2, op1)) {
+                    newGraph.setLesserEqual(op1, op2);
+                    return;
+                }
+                break;
 
             case llvm::ICmpInst::Predicate::ICMP_ULT:
             case llvm::ICmpInst::Predicate::ICMP_SLT:
-                newGraph.setLesser(op1, op2); break;
+                if (! newGraph.isLesserEqual(op2, op1)) {
+                    newGraph.setLesser(op1, op2);
+                    return;
+                }
+                break;
 
             case llvm::ICmpInst::Predicate::ICMP_UGE:
             case llvm::ICmpInst::Predicate::ICMP_SGE:
-                newGraph.setLesserEqual(op2, op1); break;
+                if (! newGraph.isLesser(op1, op2)) {
+                    newGraph.setLesserEqual(op2, op1);
+                    return;
+                }
+                break;
 
             case llvm::ICmpInst::Predicate::ICMP_UGT:
             case llvm::ICmpInst::Predicate::ICMP_SGT:
-                newGraph.setLesser(op2, op1); break;
+                if (! newGraph.isLesserEqual(op1, op2)) {
+                    newGraph.setLesser(op2, op1);
+                    return;
+                }
+                break;
 
             default:
         #ifndef NDEBUG
@@ -493,6 +519,10 @@ class RelationsAnalyzer {
         #endif
                 abort();
         }
+
+        // reachable only if conflicting relation found
+        newGraph.unsetComparativeRelations(op1);
+        newGraph.unsetComparativeRelations(op2);
     }
 
     void processPhi(ValueRelations& newGraph, VRAssumeBool* assume) const {
