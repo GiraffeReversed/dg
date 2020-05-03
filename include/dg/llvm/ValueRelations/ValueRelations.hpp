@@ -1495,14 +1495,15 @@ public:
 			dump(stream, bucketPtr.get());
 		}
 
+		if (! printCallRelations) return;
+
 		for (auto& callRelation : callRelations) {
 			stream << std::endl << "    XOR relations" << std::endl;
 			for (auto& equalPair : callRelation.equalPairs)
 				stream << "{ " << strip(debug::getValName(equalPair.first)) << "; "
 							   << strip(debug::getValName(equalPair.second))
 					   << " }" << std::endl;
-			if (printCallRelations)
-				callRelation.callSiteRelations->generalDump(stream, false);
+			callRelation.callSiteRelations->generalDump(stream, false);
 		}
 
     }
