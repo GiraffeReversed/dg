@@ -238,7 +238,7 @@ class RelationsAnalyzer {
 
         const llvm::ConstantInt* constBound = graph.getLesserEqualBound(param);
         if (constBound) {
-            const llvm::APInt& boundResult = constBound->getValue() + c2->getValue();
+            const llvm::APInt& boundResult = constBound->getValue() + c1->getValue();
             const llvm::Constant* llvmResult = llvm::ConstantInt::get(add->getType(), boundResult);
             if (graph.isLesser(constBound, param)) graph.setLesser(llvmResult, add);
             else if (graph.isEqual(constBound, param)) graph.setEqual(llvmResult, add);
