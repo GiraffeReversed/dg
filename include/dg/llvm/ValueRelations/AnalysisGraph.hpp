@@ -85,7 +85,9 @@ class AnalysisGraph {
 
             if (auto constIndex = llvm::dyn_cast<llvm::ConstantInt>(index)) {
                 if (constIndex->isZero()) {
-                    assert(readType->isArrayTy());
+                    
+                    if (! readType->isArrayTy()) return { nullptr, nullptr };
+                    
                     readType = readType->getArrayElementType();
                     continue;
                 };
