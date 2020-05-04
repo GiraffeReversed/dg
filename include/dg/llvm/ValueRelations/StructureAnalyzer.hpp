@@ -29,12 +29,176 @@
 #include "getValName.h"
 #endif
 
+namespace {
+
+bool contains(const std::vector<std::string>& haystack, const std::string& needle) {
+    for (auto& item : haystack)
+        if (item == needle) return true;
+    return false;
+}
+
+} // namespace
+
 namespace dg {
 namespace analysis {
 namespace vr {
 
+const llvm::Value* stripCasts(const llvm::Value* inst) {
+    while (auto cast = llvm::dyn_cast<llvm::CastInst>(inst))
+        inst = cast->getOperand(0);
+    return inst;
+}
+
+uint64_t getBytes(const llvm::Type* type) {
+    unsigned byteWidth = 8;
+    assert(type->isSized());
+
+    uint64_t size = type->getPrimitiveSizeInBits();
+    assert (size % byteWidth == 0);
+
+    return size / byteWidth;
+}
+
+struct AllocatedSizeView{
+    const llvm::Value* elementCount = nullptr;
+    uint64_t elementSize = 0; // in bytes
+
+    AllocatedSizeView() = default;
+    AllocatedSizeView(const llvm::Value* count, uint64_t size)
+    : elementCount(count), elementSize(size) {}
+};
+
+class AllocatedArea {
+    const llvm::Value* ptr;
+    AllocatedSizeView originalSizeView;
+
+public:
+
+    AllocatedArea(const llvm::AllocaInst* alloca): ptr(alloca) {
+        const llvm::Type* allocatedType = alloca->getAllocatedType();
+        
+        if (allocatedType->isArrayTy()) {
+            const llvm::Type* elemType = allocatedType->getArrayElementType();
+            // DANGER just an arbitrary type
+            llvm::Type* i32 = llvm::Type::getInt32Ty(elemType->getContext());
+            uint64_t intCount = allocatedType->getArrayNumElements();
+
+            originalSizeView = AllocatedSizeView(llvm::ConstantInt::get(i32, intCount), getBytes(elemType));
+        } else {
+            originalSizeView = AllocatedSizeView(alloca->getOperand(0), getBytes(allocatedType));
+        }
+    }
+
+    AllocatedArea(const llvm::CallInst* call): ptr(call) {
+        auto function = call->getCalledFunction();
+
+        if (function->getName().equals("malloc") || function->getName().equals("realloc")) {
+            originalSizeView = AllocatedSizeView( call->getOperand(0), 1);
+            return;
+        }
+
+        if (function->getName().equals("calloc")) {
+            auto size = llvm::cast<llvm::ConstantInt>(call->getOperand(1));
+            originalSizeView = AllocatedSizeView(call->getOperand(0), size->getZExtValue());
+            return;
+        }
+
+        assert(0 && "only handled functions are considered");
+    }
+
+    const llvm::Value* getPtr() const { return ptr; }
+
+    std::vector<AllocatedSizeView> getAllocatedSizeViews() const {
+        std::vector<AllocatedSizeView> result;
+        result.emplace_back(originalSizeView);
+
+        AllocatedSizeView currentView = originalSizeView;
+
+        while (auto op = llvm::dyn_cast<llvm::BinaryOperator>(stripCasts(currentView.elementCount))) {
+            uint64_t size = currentView.elementSize;
+
+            if (op->getOpcode() != llvm::Instruction::Add
+             && op->getOpcode() != llvm::Instruction::Mul)
+                // TODO could also handle subtraction of negative constant
+                break;
+
+            auto c1 = llvm::dyn_cast<llvm::ConstantInt>(op->getOperand(0));
+            auto c2 = llvm::dyn_cast<llvm::ConstantInt>(op->getOperand(1));
+
+            if (c1 && c2) {
+                llvm::APInt newCount;
+                llvm::APInt newSize;
+                switch (op->getOpcode()) {
+
+                    case llvm::Instruction::Add:
+                        newCount = c1->getValue() + c2->getValue();
+                        result.emplace_back(llvm::ConstantInt::get(c1->getType(), newCount), size);
+                        break;
+
+                    case llvm::Instruction::Mul:
+                        newSize = c1->getValue() * size;
+                        result.emplace_back(c2, newSize.getZExtValue());
+                        newSize = c2->getValue() * size;
+                        result.emplace_back(c1, newSize.getZExtValue());
+
+                        newCount = c1->getValue() * c2->getValue();
+                        result.emplace_back(llvm::ConstantInt::get(c1->getType(), newCount), size);
+                        break;
+
+                    default:
+                        assert (0 && "unreachable");
+                }
+                // if we found two-constant operation, non of them can be binary
+                // operator to further unwrap
+                break;
+            }
+
+            // TODO use more info here
+            if (! c1 && ! c2) break;
+
+            // else one of c1, c2 is constant and the other is variable
+            const llvm::Value* param = nullptr;
+            if (c2) { c1 = c2; param = op->getOperand(0); }
+            else param = op->getOperand(1);
+
+            // now c1 is constant and param is variable
+            assert (c1 && param);
+
+            switch(op->getOpcode()) {
+
+                case llvm::Instruction::Add:
+                    result.emplace_back(param, size);
+                    break;
+
+                case llvm::Instruction::Mul:
+                    result.emplace_back(param, size * c1->getZExtValue());
+                    break;
+
+                default:
+                    assert (0 && "unreachable");
+            }
+            currentView = result.back();
+            // reachable only in this last c1 && param case
+        }
+        return result;
+    }
+
+#ifndef NDEBUG
+    void ddump() const {
+        std::cerr << "Allocated area:" << std::endl;
+        std::cerr << "    ptr " << debug::getValName(ptr) << std::endl;
+        std::cerr << "    count " << debug::getValName(originalSizeView.elementCount) << std::endl;
+        std::cerr << "    size " << originalSizeView.elementSize << std::endl;
+        std::cerr << std::endl;
+    }
+#endif
+};
+
 
 class StructureAnalyzer {
+
+    using LocationMap = std::map<const llvm::Instruction*, VRLocation*>;
+    using BlockMap = std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>;
 
     // holds vector of instructions, which are processed on any path back to given location
     // is computed only for locations with more than one predecessor
@@ -46,10 +210,15 @@ class StructureAnalyzer {
     const std::vector<unsigned> collected = { llvm::Instruction::Add,
                                               llvm::Instruction::Sub,
                                               llvm::Instruction::Mul };
-
     std::map<unsigned, std::set<const llvm::Instruction*>> instructionSets;
 
-    void categorizeEdges(const llvm::Module& module, const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping) {
+    std::vector<AllocatedArea>& allocatedAreas;
+    const std::vector<std::string> handledAllocationFunctions = { "malloc",
+                                                                  "realloc",
+                                                                  "calloc" };
+
+    void categorizeEdges(const llvm::Module& module,
+                         const BlockMap& blockMapping) {
         for (auto& function : module) {
             if (function.isDeclaration()) continue;
 
@@ -107,7 +276,7 @@ class StructureAnalyzer {
         }
     }
 
-    void findLoops(const std::map<const llvm::Instruction *, VRLocation *>& locationMapping) {
+    void findLoops(const LocationMap& locationMapping) {
         for (auto& pair : locationMapping) {
             auto& location = pair.second;
             std::vector<VREdge*>& predEdges = location->predecessors;
@@ -173,7 +342,7 @@ class StructureAnalyzer {
         return result;
     }
 
-    void initializeDefined(const llvm::Module& module, const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping) {
+    void initializeDefined(const llvm::Module& module, const BlockMap& blockMapping) {
 
         for (const llvm::Function& function : module) {
             if (function.isDeclaration()) continue;
@@ -238,15 +407,206 @@ class StructureAnalyzer {
         }
     }
 
+    bool isValidAllocationCall(const llvm::Value* val) const {
+        if (! llvm::isa<llvm::CallInst>(val)) return false;
+
+        const llvm::CallInst* call = llvm::cast<llvm::CallInst>(val);
+        auto function = call->getCalledFunction();
+
+        if (! function
+         || ! contains(handledAllocationFunctions, function->getName())
+         || (function->getName().equals("calloc") && ! llvm::isa<llvm::ConstantInt>(call->getOperand(1))))
+            return false;
+
+        return true;
+    }
+
+    void collectAllocatedAreas(const llvm::Module& module) {
+        // compute allocated areas throughout the code
+        for (const llvm::Function& function : module) {
+            for (const llvm::BasicBlock& block : function) {
+                for (const llvm::Instruction& inst : block) {
+
+                    if (auto alloca = llvm::dyn_cast<llvm::AllocaInst>(&inst)) {
+                        allocatedAreas.emplace_back(alloca);
+                    }
+
+                    else if (auto call = llvm::dyn_cast<llvm::CallInst>(&inst)) {
+                        if (isValidAllocationCall(call)) {
+                            allocatedAreas.emplace_back(call);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    void setValidAreasFromNoPredecessors(std::vector<bool>& validAreas) {
+        validAreas = std::vector<bool>(allocatedAreas.size(), false);
+    }
+
+    void setValidAreasFromSinglePredecessor(VRLocation* location, std::vector<bool>& validAreas) {
+        // copy predecessors valid areas
+        VREdge* edge = location->predecessors[0];
+        validAreas = edge->source->relations.getValidAreas();
+
+        unsigned index = 0;
+        const AllocatedArea* area = nullptr;
+
+        // and alter them according to info from edge
+        if (edge->op->isInstruction()) {
+
+            const llvm::Instruction* inst = static_cast<VRInstruction *>(edge->op.get())->getInstruction();
+
+            // every allocated memory on stack is considered allocated successfully
+            if (llvm::isa<llvm::AllocaInst>(inst)) {
+                std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, inst); assert(area);
+                validAreas[index] = true;
+            }
+
+            // if came across lifetime_end call, then mark memory whose scope ended invalid
+            if (auto intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(inst)) {
+                if (intrinsic->getIntrinsicID() == llvm::Intrinsic::lifetime_end) {
+
+                    for (auto* equal : location->relations.getEqual(intrinsic->getOperand(1))) {
+                        if (llvm::isa<llvm::AllocaInst>(equal)) {
+                            std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal); assert(area);
+                            validAreas[index] = false;
+                        }
+                    }
+                }
+            }
+
+        // if heap allocation call was just checked as successful, mark memory valid
+        } else if (edge->op->isAssumeBool()) {
+            VRAssumeBool* assume = static_cast<VRAssumeBool *>(edge->op.get());
+
+            auto icmp = llvm::dyn_cast<llvm::ICmpInst>(assume->getValue());
+            if (! icmp) return;
+
+            auto c1 = llvm::dyn_cast<llvm::ConstantInt>(icmp->getOperand(0));
+            auto c2 = llvm::dyn_cast<llvm::ConstantInt>(icmp->getOperand(1));
+
+            // pointer must be compared to zero // TODO? or greater
+            if ((c1 && c2) || (! c1 && ! c2) || (! c1 && ! c2->isZero()) || (! c2 && ! c1->isZero())) return;
+
+            bool assumption = assume->getAssumption();
+            llvm::ICmpInst::Predicate pred = assumption ?
+                icmp->getSignedPredicate() : icmp->getInversePredicate();
+
+            // check that predicate implies wanted relation
+            switch (pred) {
+                case llvm::ICmpInst::Predicate::ICMP_EQ:
+                    // implied relation is equality to zero, this proves invalidity
+                    return;
+
+                case llvm::ICmpInst::Predicate::ICMP_NE:
+                    // with previous checks, NE will surely be sufficient
+                    break;
+
+                case llvm::ICmpInst::Predicate::ICMP_ULE:
+                case llvm::ICmpInst::Predicate::ICMP_SLE:
+                case llvm::ICmpInst::Predicate::ICMP_ULT:
+                case llvm::ICmpInst::Predicate::ICMP_SLT:
+                    // if zero stands right to </<=, this proves invalidity
+                    if (c2) return;
+                    break;
+
+                case llvm::ICmpInst::Predicate::ICMP_UGE:
+                case llvm::ICmpInst::Predicate::ICMP_SGE:
+                case llvm::ICmpInst::Predicate::ICMP_UGT:
+                case llvm::ICmpInst::Predicate::ICMP_SGT:
+                    // if zero stands left to >/>=, this proves invalidity
+                    if (c1) return;
+                    break;
+
+                default:
+                    assert(0 && "unreachable, would have failed in processICMP");
+            }
+
+            // get the value compared to zero
+            const llvm::Value* param = c1 ? icmp->getOperand(1) : icmp->getOperand(0);
+
+            for (auto equal : location->relations.getEqual(param)) {
+                std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal);
+                // if compared pointer or equal belong to allocated area, this area
+                // can be marked valid
+                if (area) validAreas[index] = true;
+            }
+        }
+    }
+
+    bool trueInAll(const std::vector<VREdge*>& predecessors, unsigned index) {
+        for (VREdge* predecessor : predecessors) {
+            //std::cerr << " oof" << std::endl;
+            if (predecessor->type == EdgeType::FORWARD || predecessor->type == EdgeType::DEFAULT) return false;
+            if (predecessor->type != EdgeType::BACK && ! predecessor->source->relations.getValidAreas()[index])
+                return false;
+        }
+        return true;
+    }
+
+    void setValidAreasFromMultiplePredecessors(VRLocation* location, std::vector<bool>& validAreas) {
+        // intersect valid areas from predecessors
+        for (unsigned i = 0; i < allocatedAreas.size(); ++i) {
+            //std::cerr << "about " << std::endl;
+            //std::cerr << location->predecessors[0]->source->relations.getValidAreas()[i] << std::endl;
+            validAreas.push_back( trueInAll(location->predecessors, i) );
+        }
+    }
+
+    void propagateAllocatedAreas(const llvm::Module& module, const BlockMap& blockMapping) {
+        for (const llvm::Function& function : module) {
+            for (const llvm::BasicBlock& block : function) {
+                for (auto& location : blockMapping.at(&block)->locations) {
+
+                    /*std::cerr << "LOCATION " << location->id << std::endl;
+                    for (VREdge* predEdge : location->predecessors) {
+                          std::cerr << predEdge->op->toStr() << " ";
+                          for (bool v : predEdge->source->relations.getValidAreas()) {
+                              std::cerr << (v ? "1" : "0");
+                          }
+                            switch(predEdge->type) {
+                                case EdgeType::FORWARD: std::cerr << " Forward";break;
+                                case EdgeType::BACK: std::cerr << " back"; break;
+                                case EdgeType::TREE: std::cerr << " trree"; break;
+                                case EdgeType::DEFAULT: std::cerr << " default"; break;
+                            }
+                            
+                          std::cerr << std::endl;
+                    }*/
+
+                    std::vector<bool>& validAreas = location->relations.getValidAreas();
+
+                    //std::cerr << "still good" << std::endl;
+
+                    switch (location->predecessors.size()) {
+                        case 0:  setValidAreasFromNoPredecessors(validAreas); break;
+                        case 1:  setValidAreasFromSinglePredecessor(location.get(), validAreas); break;
+                        default: setValidAreasFromMultiplePredecessors(location.get(), validAreas); break;
+                    }
+
+                    //std::cerr << "got after" << std::endl;
+                }
+            }
+        }
+    }
 
 public:
-    StructureAnalyzer(const llvm::Module& m,
-                  std::map<const llvm::Instruction *, VRLocation *>& locs,
-                  std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs) {
+    StructureAnalyzer(std::vector<AllocatedArea>& areas): allocatedAreas(areas) {}
+
+    void analyzeBeforeRelationsAnalysis(const llvm::Module& m, const LocationMap& locs, const BlockMap& blcs) {
         categorizeEdges(m, blcs);
         findLoops(locs);
         collectInstructionSet(m);
         //initializeDefined(m, blcs);
+    }
+
+    void analyzeAfterRelationsAnalysis(const llvm::Module& m, const BlockMap& blcs) {
+        //std::cerr << "here still" << std::endl;
+        collectAllocatedAreas(m);
+        //std::cerr << "and here" << std::endl;
+        propagateAllocatedAreas(m, blcs);
     }
 
     bool isDefined(VRLocation* loc, const llvm::Value* val) const {
@@ -263,6 +623,17 @@ public:
 
     const std::set<const llvm::Instruction*>& getInstructionSetFor(unsigned opcode) const {
         return instructionSets.at(opcode);
+    }
+
+    static std::pair<unsigned, const AllocatedArea*> getAllocatedAreaFor(
+            const std::vector<AllocatedArea>& areas,
+            const llvm::Value* ptr) {
+        unsigned i = 0;
+        for (auto& area : areas) {
+            if (area.getPtr() == ptr) return { i, &area };
+            ++i;
+        }
+        return { 0, nullptr };
     }
 };
 
