@@ -22,57 +22,7 @@ class AnalysisGraph {
     std::map<const llvm::Instruction *, VRLocation *> locationMapping;
     std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>> blockMapping;
 
-    uint64_t getBytes(const llvm::Type* type) const {
-        unsigned byteWidth = 8;
-        assert(type->isSized());
-
-        uint64_t size = type->getPrimitiveSizeInBits();
-        assert (size % byteWidth == 0);
-
-        return size / byteWidth;
-    }
-
-    std::pair<const llvm::Value*, uint64_t> getAllocatedCountAndSize(
-            const ValueRelations& relations, 
-            const llvm::GetElementPtrInst* gep) const {
-        for (const llvm::Value* equal : relations.getEqual(gep->getPointerOperand())) {
-
-            if (auto alloca = llvm::dyn_cast<llvm::AllocaInst>(equal)) {
-                const llvm::Type* allocatedType = alloca->getAllocatedType();
-                const llvm::Value* count = nullptr;
-                uint64_t size = 0;
-                
-                if (allocatedType->isArrayTy()) {
-                    const llvm::Type* elemType = allocatedType->getArrayElementType();
-                    // DANGER just an arbitrary type
-                    llvm::Type* i32 = llvm::Type::getInt32Ty(elemType->getContext());
-                    uint64_t intCount = allocatedType->getArrayNumElements();
-                    count = llvm::ConstantInt::get(i32, intCount);
-                    size = getBytes(elemType);
-                } else {
-                    count = alloca->getOperand(0);
-                    size = getBytes(allocatedType);
-                }
-                return { count, size };
-            } else if (auto call = llvm::dyn_cast<llvm::CallInst>(equal)) {
-                auto function = call->getCalledFunction();
-
-                if (! function) return { nullptr, 0 };
-
-                if (function->getName().equals("malloc"))
-                    return { call->getOperand(0), 1};
-
-                if (function->getName().equals("calloc")) {
-                    if (auto size = llvm::dyn_cast<llvm::ConstantInt>(call->getOperand(1)))
-                        return { call->getOperand(0), size->getZExtValue() };
-                }
-
-                if (function->getName().equals("realloc"))
-                    return { call->getOperand(1), 1 };
-            }
-        }
-        return { nullptr, 0 };
-    }  
+    std::vector<AllocatedArea> allocatedAreas;
 
     std::pair<const llvm::Value*, const llvm::Type*> getOnlyNonzeroIndex(
             const llvm::GetElementPtrInst* gep) const {
@@ -85,7 +35,7 @@ class AnalysisGraph {
 
             if (auto constIndex = llvm::dyn_cast<llvm::ConstantInt>(index)) {
                 if (constIndex->isZero()) {
-                    
+
                     if (! readType->isArrayTy()) return { nullptr, nullptr };
                     
                     readType = readType->getArrayElementType();
@@ -98,55 +48,9 @@ class AnalysisGraph {
         return { firstIndex, readType };
     }
 
-    std::pair<const llvm::Value*, uint64_t> stripArithmeticOp(const llvm::Value* allocCount, uint64_t allocElem) const {
-        while (auto cast = llvm::dyn_cast<llvm::CastInst>(allocCount))
-            allocCount = cast->getOperand(0);
-
-        if (! llvm::isa<llvm::BinaryOperator>(allocCount)) return { nullptr, 0 };
-
-        auto op = llvm::cast<llvm::BinaryOperator>(allocCount);
-        if (op->getOpcode() != llvm::Instruction::Add
-                && op->getOpcode() != llvm::Instruction::Mul)
-            // TODO could also handle subtraction of negative constant
-            return { nullptr, 0 };
-
-        auto c1 = llvm::dyn_cast<llvm::ConstantInt>(op->getOperand(0));
-        auto c2 = llvm::dyn_cast<llvm::ConstantInt>(op->getOperand(1));
-
-        if (c1 && c2) {
-            llvm::APInt result;
-            switch (op->getOpcode()) {
-                case llvm::Instruction::Add:
-                    result = c1->getValue() + c2->getValue(); break;
-                case llvm::Instruction::Mul:
-                    result = c1->getValue() * c2->getValue(); break;
-                default:
-                    assert (0 && "stripArithmeticOp: unreachable");
-            }
-            return { llvm::ConstantInt::get(c1->getType(), result), allocElem };
-        }
-
-        // TODO use more info here
-        if (! c1 && ! c2) return { nullptr, 0 };
-
-        const llvm::Value* param = nullptr;
-        if (c2) { c1 = c2; param = op->getOperand(0); }
-        else param = op->getOperand(1);
-
-        assert (c1 && param);
-
-        switch(op->getOpcode()) {
-            case llvm::Instruction::Add:
-                return { param, allocElem };
-            case llvm::Instruction::Mul:
-                return { param, allocElem * c1->getZExtValue() };
-            default:
-                return { nullptr, 0 };
-        }
-    }
-
     std::string isValidForGraph(
-            ValueRelations& relations,
+            const ValueRelations& relations,
+            const std::vector<bool> validMemory,
             const llvm::GetElementPtrInst* gep,
             uint64_t readSize) const {
         std::cerr << "==== PROOF BEGINS =====" << std::endl;
@@ -154,13 +58,20 @@ class AnalysisGraph {
 
         //relations.ddump(); // mark parameter const when deleting
 
-        const llvm::Value* allocCount;
-        uint64_t allocElem;
-        std::tie(allocCount, allocElem) = getAllocatedCountAndSize(relations, gep);
-        // if we do not know the size of allocated memory
-        if (! allocCount) return "unknown";
+        const AllocatedArea* area = nullptr;
+        unsigned index = 0;
 
-        if (gep->hasAllZeroIndices()) return readSize <= allocElem ? "true" : "maybe";
+        for (const llvm::Value* equal : relations.getEqual(gep->getPointerOperand())) {
+            std::tie(index, area) = StructureAnalyzer::getAllocatedAreaFor(allocatedAreas, equal);
+            if (area) break;
+        }
+        if (! area) return "maybe"; // memory was not allocated by ordinary means (or at all)
+        if (! validMemory[index]) return "maybe"; // memory is not valid at given location
+
+        const std::vector<AllocatedSizeView>& views = area->getAllocatedSizeViews();
+        if (views.empty()) return "unknown"; // the size of allocated memory cannot be determined
+
+        if (gep->hasAllZeroIndices()) return readSize <= views[0].elementSize ? "true" : "maybe";
         // maybe, because can read i64 from an array of two i32
 
         const llvm::Value* gepIndex;
@@ -178,7 +89,7 @@ class AnalysisGraph {
         std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
 
         // DANGER just an arbitrary type
-        llvm::Type* i32 = llvm::Type::getInt32Ty(allocCount->getContext());
+        llvm::Type* i32 = llvm::Type::getInt32Ty(views[0].elementCount->getContext());
         const llvm::Constant* zero = llvm::ConstantInt::getSigned(i32, 0);
 
         // check if index doesnt point before memory
@@ -188,21 +99,18 @@ class AnalysisGraph {
         if (! relations.isLesserEqual(zero, gepIndex)) return "maybe";
 
         // check if index doesnt point after memory
-        do {
-            std::cerr << "inloop" << std::endl;
-            std::cerr << "[allocCount] " << dg::debug::getValName(allocCount) << std::endl;
-            std::cerr << "[allocElem] " << allocElem << std::endl;
-            std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
-            if (relations.isLesser(gepIndex, allocCount)) {
-                // TODO handle some cases where size and max index are both constants,
-                // but type accessed is different from type allocated
-                if (gepElem <= allocElem) return readSize <= allocElem ? "true" : "maybe";
-            }
-            if (relations.isLesserEqual(allocCount, gepIndex) && gepElem >= allocElem)
-                return "false";
+        for (const AllocatedSizeView& view : views) {
 
-            std::tie(allocCount, allocElem) = stripArithmeticOp(allocCount, allocElem);
-        } while (allocCount);
+            std::cerr << "inloop" << std::endl;
+            std::cerr << "[elementCount] " << dg::debug::getValName(view.elementCount) << std::endl;
+            std::cerr << "[elementSize] " << view.elementSize << std::endl;
+            std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
+            if (relations.isLesser(gepIndex, view.elementCount)) {
+                if (gepElem <= view.elementSize) return readSize <= view.elementSize ? "true" : "maybe";
+            }
+            if (relations.isLesserEqual(view.elementCount, gepIndex) && gepElem >= view.elementSize)
+                return "false";
+        }
 
         return "maybe";
     }  
@@ -228,9 +136,9 @@ public:
         auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(ptr);
         if (! gep) return "unknown";
 
-        auto& relations = locationMapping.at(gep)->relations;
+        const ValueRelations& relations = locationMapping.at(gep)->relations;
         if (relations.getCallRelations().empty())
-            return isValidForGraph(relations, gep, readSize);
+            return isValidForGraph(relations, relations.getValidAreas(), gep, readSize);
 
         // else we have to check that access is valid in every case
         for (const ValueRelations::CallRelation& callRelation : relations.getCallRelations()) {
@@ -245,14 +153,22 @@ public:
                 merged.setEqual(equalPair.first, equalPair.second);
             }
 
+            const ValueRelations& callSiteRelations = *callRelation.callSiteRelations;
+
             // this vrlocation is unreachable with relations from given call relation
-            hasConflict = hasConflict || ! merged.merge(*callRelation.callSiteRelations);
+            hasConflict = hasConflict || ! merged.merge(callSiteRelations);
             merged.getCallRelations().clear();
 
             // since location is unreachable, it does not make sence to qualify the memory access
             if (hasConflict) continue;
 
-            std::string result = isValidForGraph(merged, gep, readSize);
+            std::vector<bool> validMemory(allocatedAreas.size());
+
+            if (relations.getValidAreas().empty() || callSiteRelations.getValidAreas().empty()) return "unknown";
+            for (unsigned i = 0; i < allocatedAreas.size(); ++i)
+                validMemory[i] = relations.getValidAreas()[i] || callSiteRelations.getValidAreas()[i];
+
+            std::string result = isValidForGraph(merged, validMemory, gep, readSize);
             if (result != "true") return result;
         }
         return "true";
@@ -262,9 +178,13 @@ public:
         GraphBuilder gb(module, locationMapping, blockMapping);
         gb.build();
 
-        StructureAnalyzer sa(module, locationMapping, blockMapping);        
+        StructureAnalyzer sa(allocatedAreas);
+        sa.analyzeBeforeRelationsAnalysis(module, locationMapping, blockMapping);
+
         RelationsAnalyzer ra(module, locationMapping, blockMapping, sa);
         ra.analyze(maxPass);
+
+        sa.analyzeAfterRelationsAnalysis(module, blockMapping);
     }
 
     const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& getBlockMapping() const {
