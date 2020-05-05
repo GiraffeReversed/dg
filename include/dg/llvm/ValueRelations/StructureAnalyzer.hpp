@@ -12,6 +12,7 @@
 
 #include <llvm/IR/Value.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Module.h>
 
@@ -538,8 +539,9 @@ class StructureAnalyzer {
 
     bool trueInAll(const std::vector<VREdge*>& predecessors, unsigned index) {
         for (VREdge* predecessor : predecessors) {
+            if (predecessor->source->relations.getValidAreas().empty() && predecessor->type != EdgeType::BACK) return false;
             //std::cerr << " oof" << std::endl;
-            if (predecessor->type == EdgeType::FORWARD || predecessor->type == EdgeType::DEFAULT) return false;
+            //if (predecessor->type == EdgeType::FORWARD || predecessor->type == EdgeType::DEFAULT) return false;
             if (predecessor->type != EdgeType::BACK && ! predecessor->source->relations.getValidAreas()[index])
                 return false;
         }
