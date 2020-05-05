@@ -53,8 +53,8 @@ class AnalysisGraph {
             const std::vector<bool> validMemory,
             const llvm::GetElementPtrInst* gep,
             uint64_t readSize) const {
-        std::cerr << "==== PROOF BEGINS =====" << std::endl;
-        std::cerr << dg::debug::getValName(gep) << std::endl << std::endl;
+        //std::cerr << "==== PROOF BEGINS =====" << std::endl;
+        //std::cerr << dg::debug::getValName(gep) << std::endl << std::endl;
 
         //relations.ddump(); // mark parameter const when deleting
 
@@ -82,11 +82,11 @@ class AnalysisGraph {
 
         uint64_t gepElem = getBytes(gepType);
 
-        std::cerr << "[readSize] " << readSize << std::endl;
-        std::cerr << "[allocElem] " << allocElem << std::endl;
-        std::cerr << "[gepElem] " << gepElem << std::endl;
-        std::cerr << "[allocCount] " << dg::debug::getValName(allocCount) << std::endl;
-        std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
+        //std::cerr << "[readSize] " << readSize << std::endl;
+        //std::cerr << "[allocElem] " << allocElem << std::endl;
+        //std::cerr << "[gepElem] " << gepElem << std::endl;
+        //std::cerr << "[allocCount] " << dg::debug::getValName(allocCount) << std::endl;
+        //std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
 
         // DANGER just an arbitrary type
         llvm::Type* i32 = llvm::Type::getInt32Ty(views[0].elementCount->getContext());
@@ -101,10 +101,10 @@ class AnalysisGraph {
         // check if index doesnt point after memory
         for (const AllocatedSizeView& view : views) {
 
-            std::cerr << "inloop" << std::endl;
-            std::cerr << "[elementCount] " << dg::debug::getValName(view.elementCount) << std::endl;
-            std::cerr << "[elementSize] " << view.elementSize << std::endl;
-            std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
+            //std::cerr << "inloop" << std::endl;
+            //std::cerr << "[elementCount] " << dg::debug::getValName(view.elementCount) << std::endl;
+            //std::cerr << "[elementSize] " << view.elementSize << std::endl;
+            //std::cerr << "[gepIndex] " << dg::debug::getValName(gepIndex) << std::endl;
             if (relations.isLesser(gepIndex, view.elementCount)) {
                 if (gepElem <= view.elementSize) return readSize <= view.elementSize ? "true" : "maybe";
             }
