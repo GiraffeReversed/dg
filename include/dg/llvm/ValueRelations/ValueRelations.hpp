@@ -466,6 +466,8 @@ private:
 
 	std::vector<CallRelation> callRelations;
 
+	std::vector<bool> validAreas;
+
 	struct ValueIterator {
 		using value_type = std::pair<T, Relation>;
 
@@ -1458,6 +1460,14 @@ public:
 
 	std::vector<CallRelation>& getCallRelations() {
 		return callRelations;
+	}
+
+	const std::vector<bool>& getValidAreas() const {
+		return validAreas;
+	}
+
+	std::vector<bool>& getValidAreas() {
+		return validAreas;
 	}
 
 	bool hasComparativeRelations(unsigned placeholder) {
