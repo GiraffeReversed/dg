@@ -614,33 +614,13 @@ class StructureAnalyzer {
             for (const llvm::BasicBlock& block : function) {
                 for (auto& location : blockMapping.at(&block)->locations) {
 
-                    /*std::cerr << "LOCATION " << location->id << std::endl;
-                    for (VREdge* predEdge : location->predecessors) {
-                          std::cerr << predEdge->op->toStr() << " ";
-                          for (bool v : predEdge->source->relations.getValidAreas()) {
-                              std::cerr << (v ? "1" : "0");
-                          }
-                            switch(predEdge->type) {
-                                case EdgeType::FORWARD: std::cerr << " Forward";break;
-                                case EdgeType::BACK: std::cerr << " back"; break;
-                                case EdgeType::TREE: std::cerr << " trree"; break;
-                                case EdgeType::DEFAULT: std::cerr << " default"; break;
-                            }
-                            
-                          std::cerr << std::endl;
-                    }*/
-
                     std::vector<bool>& validAreas = location->relations.getValidAreas();
-
-                    //std::cerr << "still good" << std::endl;
 
                     switch (location->predecessors.size()) {
                         case 0:  setValidAreasFromNoPredecessors(validAreas); break;
                         case 1:  setValidAreasFromSinglePredecessor(location.get(), validAreas); break;
                         default: setValidAreasFromMultiplePredecessors(location.get(), validAreas); break;
                     }
-
-                    //std::cerr << "got after" << std::endl;
                 }
             }
         }
@@ -657,9 +637,7 @@ public:
     }
 
     void analyzeAfterRelationsAnalysis(const llvm::Module& m, const BlockMap& blcs) {
-        //std::cerr << "here still" << std::endl;
         collectAllocatedAreas(m);
-        //std::cerr << "and here" << std::endl;
         propagateAllocatedAreas(m, blcs);
         // propagate twice because of loops, it the first pass it is not known
         // whether the loop invalidates any areas
