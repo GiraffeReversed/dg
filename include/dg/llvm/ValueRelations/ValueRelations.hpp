@@ -438,21 +438,6 @@ class ValueRelations {
 	using T = const llvm::Value*;
 	using C = const llvm::ConstantInt*;
 
-public:
-	struct CallRelation {
-		std::vector<std::pair<const llvm::Value*, const llvm::Value*>> equalPairs;
-		ValueRelations* callSiteRelations = nullptr;
-
-		friend bool operator==(const CallRelation& lt, const CallRelation& rt) {
-			return lt.equalPairs == rt.equalPairs
-				&& lt.callSiteRelations == rt.callSiteRelations;
-		}
-
-		friend bool operator!=(const CallRelation& lt, const CallRelation& rt) {
-			return ! (lt == rt);
-		}
-	};
-
 private:
     std::vector<std::unique_ptr<EqualityBucket>> buckets;
 	std::map<T, EqualityBucket*> mapToBucket;
@@ -463,8 +448,6 @@ private:
 
 	// map of pairs (a, b) such that {any of b} = load {any of a}
 	std::map<EqualityBucket*, EqualityBucket*> loads;
-
-	std::vector<CallRelation> callRelations;
 
 	std::vector<bool> validAreas;
 
@@ -1002,7 +985,7 @@ public:
 	ValueRelations() = default;
 	
 	ValueRelations(const ValueRelations& other):
-		lastPlaceholderId(other.lastPlaceholderId), callRelations(other.callRelations) {
+		lastPlaceholderId(other.lastPlaceholderId) {
 
 		std::map<EqualityBucket*, EqualityBucket*> oldToNewPtr;
 
@@ -1050,7 +1033,6 @@ public:
 		swap(first.lastPlaceholderId, second.lastPlaceholderId);
 		swap(first.nonEqualities, second.nonEqualities);
 		swap(first.loads, second.loads);
-		swap(first.callRelations, second.callRelations);
 	}
 
 	ValueRelations& operator=(ValueRelations other) {
@@ -1060,7 +1042,7 @@ public:
 	}
 
 	bool hasAllRelationsFrom(const ValueRelations& other) const {
-		return callRelations == other.callRelations && getExtraRelationsIn(other).empty();
+		return getExtraRelationsIn(other).empty();
 	}
 
 	bool merge(const ValueRelations& other, bool relationsOnly = false) {
@@ -1449,19 +1431,6 @@ public:
 		return result;
 	}
 
-	CallRelation& newCallRelation() {
-		callRelations.emplace_back();
-		return callRelations.back();
-	}
-
-	const std::vector<CallRelation>& getCallRelations() const {
-		return callRelations;
-	}
-
-	std::vector<CallRelation>& getCallRelations() {
-		return callRelations;
-	}
-
 	const std::vector<bool>& getValidAreas() const {
 		return validAreas;
 	}
@@ -1580,21 +1549,10 @@ public:
 		}
 	}
 
-    void generalDump(std::ostream& stream, bool printCallRelations=true) {
+    void generalDump(std::ostream& stream) {
 
 		for (const auto& bucketPtr : buckets) {
 			dump(stream, bucketPtr.get());
-		}
-
-		if (! printCallRelations) return;
-
-		for (auto& callRelation : callRelations) {
-			stream << std::endl << "    XOR relations" << std::endl;
-			for (auto& equalPair : callRelation.equalPairs)
-				stream << "{ " << strip(debug::getValName(equalPair.first)) << "; "
-							   << strip(debug::getValName(equalPair.second))
-					   << " }" << std::endl;
-			callRelation.callSiteRelations->generalDump(stream, false);
 		}
 
     }

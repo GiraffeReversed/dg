@@ -137,11 +137,13 @@ public:
         if (! gep) return "unknown";
 
         const ValueRelations& relations = locationMapping.at(gep)->relations;
-        if (relations.getCallRelations().empty())
+        const std::vector<CallRelation>& callRelations = structure.getCallRelationsFor(gep);
+
+        if (callRelations.empty())
             return isValidForGraph(relations, relations.getValidAreas(), gep, readSize);
 
         // else we have to check that access is valid in every case
-        for (const ValueRelations::CallRelation& callRelation : relations.getCallRelations()) {
+        for (const CallRelation& callRelation : callRelations) {
             ValueRelations merged = relations;
 
             bool hasConflict = false;
@@ -153,11 +155,10 @@ public:
                 merged.setEqual(equalPair.first, equalPair.second);
             }
 
-            const ValueRelations& callSiteRelations = *callRelation.callSiteRelations;
+            const ValueRelations& callSiteRelations = callRelation.callSite->relations;
 
             // this vrlocation is unreachable with relations from given call relation
             hasConflict = hasConflict || ! merged.merge(callSiteRelations);
-            merged.getCallRelations().clear();
 
             // since location is unreachable, it does not make sence to qualify the memory access
             if (hasConflict) continue;

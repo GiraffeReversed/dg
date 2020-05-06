@@ -199,6 +199,10 @@ public:
 #endif
 };
 
+struct CallRelation {
+    std::vector<std::pair<const llvm::Value*, const llvm::Value*>> equalPairs;
+    VRLocation* callSite = nullptr;
+};
 
 class StructureAnalyzer {
 
@@ -221,6 +225,8 @@ class StructureAnalyzer {
     const std::vector<std::string> handledAllocationFunctions = { "malloc",
                                                                   "realloc",
                                                                   "calloc" };
+
+    std::map<const llvm::Function*, std::vector<CallRelation>> callRelationsMap;
 
     void categorizeEdges(const llvm::Module& module,
                          const BlockMap& blockMapping) {
@@ -626,11 +632,47 @@ class StructureAnalyzer {
         }
     }
 
+    void initializeCallRelations(const llvm::Module& module, const LocationMap& locationMapping) {
+        for (const llvm::Function& function : module) {
+            if (function.isDeclaration())
+                continue;
+
+            auto pair = callRelationsMap.emplace(&function, std::vector<CallRelation>());
+
+            // for each location, where the function is called
+            for (const llvm::Value* user : function.users()) {
+
+                // get call from user
+                const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
+                if (! call) continue;
+
+                std::vector<CallRelation>& callRelations = pair.first->second;
+
+                callRelations.emplace_back();
+                CallRelation& callRelation = callRelations.back();
+
+                // set pointer to the location from which the function is called
+                callRelation.callSite = locationMapping.at(call);
+
+                // set formal parameters equal to real
+                unsigned argCount = 0;
+                for (const llvm::Argument& receivedArg : function.args()) {
+                    if (argCount > call->getNumArgOperands()) break;
+                    const llvm::Value* sentArg = call->getArgOperand(argCount);
+
+                    callRelation.equalPairs.emplace_back(sentArg, &receivedArg);
+                    ++argCount;
+                }
+            }
+        }
+    }
+
 public:
     void analyzeBeforeRelationsAnalysis(const llvm::Module& m, const LocationMap& locs, const BlockMap& blcs) {
         categorizeEdges(m, blcs);
         findLoops(locs);
         collectInstructionSet(m);
+        initializeCallRelations(m, locs);
         //initializeDefined(m, blcs);
     }
 
@@ -670,6 +712,12 @@ public:
     unsigned getNumberOfAllocatedAreas() const {
         return allocatedAreas.size();
     }
+
+    const std::vector<CallRelation>& getCallRelationsFor(const llvm::Instruction* inst) const {
+        const llvm::Function* function = inst->getFunction();
+        assert(function);
+        return callRelationsMap.at(function);
+	}
 };
 
 } // namespace vr

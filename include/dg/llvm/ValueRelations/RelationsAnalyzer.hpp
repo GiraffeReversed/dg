@@ -640,9 +640,6 @@ class RelationsAnalyzer {
             assert(result);
         }
 
-        // simply pass xor relations over tree edge
-        newGraph.getCallRelations() = treePredGraph.getCallRelations();
-
         return andSwapIfChanged(location->relations, newGraph);
     }
 
@@ -957,38 +954,6 @@ class RelationsAnalyzer {
         return true;
     }
 
-    void initializeCallRelations() {
-        for (const llvm::Function& function : module) {
-            if (function.isDeclaration())
-                continue;
-            
-            VRBBlock* vrblockOfEntry = blockMapping.at(&function.getEntryBlock()).get();
-            assert(vrblockOfEntry);
-
-            // for each location, where the function is called
-            for (const llvm::Value* user : function.users()) {
-
-                // get call from user
-                const llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(user);
-                if (! call) continue;
-
-                ValueRelations::CallRelation& callRelation = vrblockOfEntry->first()->relations.newCallRelation();
-                // set pointer to relations valid at call
-                callRelation.callSiteRelations = &locationMapping.at(call)->relations;
-
-                // set formal parameters equal to real
-                unsigned argCount = 0;
-                for (const llvm::Argument& receivedArg : function.args()) {
-                    if (argCount > call->getNumArgOperands()) break;
-                    const llvm::Value* sentArg = call->getArgOperand(argCount);
-
-                    callRelation.equalPairs.emplace_back(sentArg, &receivedArg);
-                    ++argCount;
-                }
-            }
-        }
-    }
-
     bool analysisPass() {
         bool changed = false;
 
@@ -1068,8 +1033,6 @@ public:
                   : module(m), locationMapping(locs), blockMapping(blcs), structure(sa) {}
 
     void analyze(unsigned maxPass) {
-
-        initializeCallRelations();
 
         bool changed = true;
         unsigned passNum = 0;
