@@ -661,6 +661,9 @@ public:
         collectAllocatedAreas(m);
         //std::cerr << "and here" << std::endl;
         propagateAllocatedAreas(m, blcs);
+        // propagate twice because of loops, it the first pass it is not known
+        // whether the loop invalidates any areas
+        propagateAllocatedAreas(m, blcs);
     }
 
     bool isDefined(VRLocation* loc, const llvm::Value* val) const {
