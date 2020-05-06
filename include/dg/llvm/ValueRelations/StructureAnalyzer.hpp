@@ -217,7 +217,7 @@ class StructureAnalyzer {
                                               llvm::Instruction::Mul };
     std::map<unsigned, std::set<const llvm::Instruction*>> instructionSets;
 
-    std::vector<AllocatedArea>& allocatedAreas;
+    std::vector<AllocatedArea> allocatedAreas;
     const std::vector<std::string> handledAllocationFunctions = { "malloc",
                                                                   "realloc",
                                                                   "calloc" };
@@ -454,7 +454,7 @@ class StructureAnalyzer {
         
         // every memory allocated on stack is considered allocated successfully
         if (llvm::isa<llvm::AllocaInst>(inst)) {
-            std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, inst); assert(area);
+            std::tie(index, area) = getAllocatedAreaFor(inst); assert(area);
             validAreas[index] = true;
         }
 
@@ -464,7 +464,7 @@ class StructureAnalyzer {
 
                 for (auto* equal : location->relations.getEqual(intrinsic->getOperand(1))) {
                     if (llvm::isa<llvm::AllocaInst>(equal)) {
-                        std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal); assert(area);
+                        std::tie(index, area) = getAllocatedAreaFor(equal); assert(area);
                         validAreas[index] = false;
                     }
                 }
@@ -480,7 +480,7 @@ class StructureAnalyzer {
                 // if realloc of memory occured, the reallocated memory cannot be considered valid
                 // until the realloc is proven unsuccessful
                 for (auto* equal : location->relations.getEqual(call->getOperand(0))) {
-                    std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal);
+                    std::tie(index, area) = getAllocatedAreaFor(equal);
                     if (area) validAreas[index] = false;
                 }
             }
@@ -488,7 +488,7 @@ class StructureAnalyzer {
             if (function->getName().equals("free")) {
                 // if free occures, the freed memory cannot be considered valid anymore
                 for (auto* equal : location->relations.getEqual(call->getOperand(0))) {
-                    std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal);
+                    std::tie(index, area) = getAllocatedAreaFor(equal);
                     if (area) validAreas[index] = false;
                 }
             }
@@ -499,7 +499,7 @@ class StructureAnalyzer {
         unsigned preReallocIndex = 0;
         const AllocatedArea* preReallocArea = nullptr;
         if (area->getReallocatedPtr())
-            std::tie(preReallocIndex, preReallocArea) = getAllocatedAreaFor(allocatedAreas, area->getReallocatedPtr());
+            std::tie(preReallocIndex, preReallocArea) = getAllocatedAreaFor(area->getReallocatedPtr());
 
         if (validateThis) {
             validAreas[index] = true;
@@ -530,7 +530,7 @@ class StructureAnalyzer {
         const AllocatedArea* area = nullptr;
 
         for (auto equal : location->relations.getEqual(param)) {
-            std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal);
+            std::tie(index, area) = getAllocatedAreaFor(equal);
             // if compared pointer or equal belong to allocated area, this area
             // can be marked valid
             if (area) break;
@@ -627,8 +627,6 @@ class StructureAnalyzer {
     }
 
 public:
-    StructureAnalyzer(std::vector<AllocatedArea>& areas): allocatedAreas(areas) {}
-
     void analyzeBeforeRelationsAnalysis(const llvm::Module& m, const LocationMap& locs, const BlockMap& blcs) {
         categorizeEdges(m, blcs);
         findLoops(locs);
@@ -660,15 +658,17 @@ public:
         return instructionSets.at(opcode);
     }
 
-    static std::pair<unsigned, const AllocatedArea*> getAllocatedAreaFor(
-            const std::vector<AllocatedArea>& areas,
-            const llvm::Value* ptr) {
+    std::pair<unsigned, const AllocatedArea*> getAllocatedAreaFor(const llvm::Value* ptr) const {
         unsigned i = 0;
-        for (auto& area : areas) {
+        for (auto& area : allocatedAreas) {
             if (area.getPtr() == ptr) return { i, &area };
             ++i;
         }
         return { 0, nullptr };
+    }
+
+    unsigned getNumberOfAllocatedAreas() const {
+        return allocatedAreas.size();
     }
 };
 

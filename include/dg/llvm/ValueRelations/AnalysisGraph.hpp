@@ -22,7 +22,7 @@ class AnalysisGraph {
     std::map<const llvm::Instruction *, VRLocation *> locationMapping;
     std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>> blockMapping;
 
-    std::vector<AllocatedArea> allocatedAreas;
+    StructureAnalyzer structure;
 
     std::pair<const llvm::Value*, const llvm::Type*> getOnlyNonzeroIndex(
             const llvm::GetElementPtrInst* gep) const {
@@ -62,7 +62,7 @@ class AnalysisGraph {
         unsigned index = 0;
 
         for (const llvm::Value* equal : relations.getEqual(gep->getPointerOperand())) {
-            std::tie(index, area) = StructureAnalyzer::getAllocatedAreaFor(allocatedAreas, equal);
+            std::tie(index, area) = structure.getAllocatedAreaFor(equal);
             if (area) break;
         }
         if (! area) return "maybe"; // memory was not allocated by ordinary means (or at all)
@@ -162,10 +162,10 @@ public:
             // since location is unreachable, it does not make sence to qualify the memory access
             if (hasConflict) continue;
 
-            std::vector<bool> validMemory(allocatedAreas.size());
+            std::vector<bool> validMemory(structure.getNumberOfAllocatedAreas());
 
             if (relations.getValidAreas().empty() || callSiteRelations.getValidAreas().empty()) return "unknown";
-            for (unsigned i = 0; i < allocatedAreas.size(); ++i)
+            for (unsigned i = 0; i < structure.getNumberOfAllocatedAreas(); ++i)
                 validMemory[i] = relations.getValidAreas()[i] || callSiteRelations.getValidAreas()[i];
 
             std::string result = isValidForGraph(merged, validMemory, gep, readSize);
@@ -178,13 +178,12 @@ public:
         GraphBuilder gb(module, locationMapping, blockMapping);
         gb.build();
 
-        StructureAnalyzer sa(allocatedAreas);
-        sa.analyzeBeforeRelationsAnalysis(module, locationMapping, blockMapping);
+        structure.analyzeBeforeRelationsAnalysis(module, locationMapping, blockMapping);
 
-        RelationsAnalyzer ra(module, locationMapping, blockMapping, sa);
+        RelationsAnalyzer ra(module, locationMapping, blockMapping, structure);
         ra.analyze(maxPass);
 
-        sa.analyzeAfterRelationsAnalysis(module, blockMapping);
+        structure.analyzeAfterRelationsAnalysis(module, blockMapping);
     }
 
     const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& getBlockMapping() const {
