@@ -542,7 +542,8 @@ class RelationsAnalyzer {
 
         VRBBlock* vrbblock = blockMapping.at(assumedPred).get();
         VRLocation* source = vrbblock->last();
-        newGraph.merge(source->relations);
+        bool result = newGraph.merge(source->relations);
+        assert(result);
     }
 
     void processAssumeEqual(ValueRelations& newGraph, VRAssumeEqual* assume) const {
@@ -634,8 +635,10 @@ class RelationsAnalyzer {
         VRLocation* treePred = getTreePred(location);
         const ValueRelations& treePredGraph = treePred->relations;
 
-        if (location->isJustLoopJoin())
-            newGraph.merge(treePredGraph, true);
+        if (location->isJustLoopJoin()) {
+            bool result = newGraph.merge(treePredGraph, true);
+            assert(result);
+        }
 
         // simply pass xor relations over tree edge
         newGraph.getCallRelations() = treePredGraph.getCallRelations();
