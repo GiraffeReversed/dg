@@ -71,6 +71,8 @@ struct AllocatedSizeView{
 
 class AllocatedArea {
     const llvm::Value* ptr;
+    // used only if memory was allocated with realloc, as fallback when realloc fails
+    const llvm::Value* reallocatedPtr = nullptr;
     AllocatedSizeView originalSizeView;
 
 public:
@@ -93,21 +95,23 @@ public:
     AllocatedArea(const llvm::CallInst* call): ptr(call) {
         auto function = call->getCalledFunction();
 
-        if (function->getName().equals("malloc") || function->getName().equals("realloc")) {
-            originalSizeView = AllocatedSizeView( call->getOperand(0), 1);
-            return;
+        if (function->getName().equals("malloc")) {
+            originalSizeView = AllocatedSizeView(call->getOperand(0), 1);
         }
 
         if (function->getName().equals("calloc")) {
             auto size = llvm::cast<llvm::ConstantInt>(call->getOperand(1));
             originalSizeView = AllocatedSizeView(call->getOperand(0), size->getZExtValue());
-            return;
         }
 
-        assert(0 && "only handled functions are considered");
+        if (function->getName().equals("realloc")) {
+            originalSizeView = AllocatedSizeView(call->getOperand(0), 1);
+            reallocatedPtr = call->getOperand(0);
+        }
     }
 
     const llvm::Value* getPtr() const { return ptr; }
+    const llvm::Value* getReallocatedPtr() const { return reallocatedPtr; }
 
     std::vector<AllocatedSizeView> getAllocatedSizeViews() const {
         std::vector<AllocatedSizeView> result;
@@ -414,12 +418,9 @@ class StructureAnalyzer {
         const llvm::CallInst* call = llvm::cast<llvm::CallInst>(val);
         auto function = call->getCalledFunction();
 
-        if (! function
-         || ! contains(handledAllocationFunctions, function->getName())
-         || (function->getName().equals("calloc") && ! llvm::isa<llvm::ConstantInt>(call->getOperand(1))))
-            return false;
+        return function && contains(handledAllocationFunctions, function->getName())
+            && (! function->getName().equals("calloc") || llvm::isa<llvm::ConstantInt>(call->getOperand(1)));
 
-        return true;
     }
 
     void collectAllocatedAreas(const llvm::Module& module) {
@@ -442,8 +443,137 @@ class StructureAnalyzer {
         }
     }
 
-    void setValidAreasFromNoPredecessors(std::vector<bool>& validAreas) {
+    void setValidAreasFromNoPredecessors(std::vector<bool>& validAreas) const {
         validAreas = std::vector<bool>(allocatedAreas.size(), false);
+    }
+
+    void setValidAreasByInstruction(VRLocation* location, std::vector<bool>& validAreas, VRInstruction* vrinst) const {
+        const llvm::Instruction* inst = vrinst->getInstruction();
+        unsigned index = 0;
+        const AllocatedArea* area = nullptr;
+        
+        // every memory allocated on stack is considered allocated successfully
+        if (llvm::isa<llvm::AllocaInst>(inst)) {
+            std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, inst); assert(area);
+            validAreas[index] = true;
+        }
+
+        // if came across lifetime_end call, then mark memory whose scope ended invalid
+        if (auto intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(inst)) {
+            if (intrinsic->getIntrinsicID() == llvm::Intrinsic::lifetime_end) {
+
+                for (auto* equal : location->relations.getEqual(intrinsic->getOperand(1))) {
+                    if (llvm::isa<llvm::AllocaInst>(equal)) {
+                        std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal); assert(area);
+                        validAreas[index] = false;
+                    }
+                }
+            }
+        }
+
+        if (auto call = llvm::dyn_cast<llvm::CallInst>(inst)) {
+            auto function = call->getCalledFunction();
+
+            if (! function) return;
+
+            if (function->getName().equals("realloc")) {
+                // if realloc of memory occured, the reallocated memory cannot be considered valid
+                // until the realloc is proven unsuccessful
+                for (auto* equal : location->relations.getEqual(call->getOperand(0))) {
+                    std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal);
+                    if (area) validAreas[index] = false;
+                }
+            }
+
+            if (function->getName().equals("free")) {
+                // if free occures, the freed memory cannot be considered valid anymore
+                for (auto* equal : location->relations.getEqual(call->getOperand(0))) {
+                    std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal);
+                    if (area) validAreas[index] = false;
+                }
+            }
+        }
+    }
+
+    void setValidArea(std::vector<bool>& validAreas, const AllocatedArea* area, unsigned index, bool validateThis) const {
+        unsigned preReallocIndex = 0;
+        const AllocatedArea* preReallocArea = nullptr;
+        if (area->getReallocatedPtr())
+            std::tie(preReallocIndex, preReallocArea) = getAllocatedAreaFor(allocatedAreas, area->getReallocatedPtr());
+
+        if (validateThis) {
+            validAreas[index] = true;
+            if (preReallocArea) assert (! validAreas[preReallocIndex]);
+        
+        // else the original area, if any, should be validated
+        } else if (preReallocArea) {
+            validAreas[preReallocIndex] = true;
+            assert (! validAreas[index]);
+        }
+    }
+
+    // if heap allocation call was just checked as successful, mark memory valid
+    void setValidAreasByAssumeBool(VRLocation* location, std::vector<bool>& validAreas, VRAssumeBool* assume) const {
+        auto icmp = llvm::dyn_cast<llvm::ICmpInst>(assume->getValue());
+        if (! icmp) return;
+
+        auto c1 = llvm::dyn_cast<llvm::ConstantInt>(icmp->getOperand(0));
+        auto c2 = llvm::dyn_cast<llvm::ConstantInt>(icmp->getOperand(1));
+
+        // pointer must be compared to zero // TODO? or greater
+        if ((c1 && c2) || (! c1 && ! c2) || (! c1 && ! c2->isZero()) || (! c2 && ! c1->isZero())) return;
+
+        // get the compared parameter
+        const llvm::Value* param = c1 ? icmp->getOperand(1) : icmp->getOperand(0);
+
+        unsigned index = 0;
+        const AllocatedArea* area = nullptr;
+
+        for (auto equal : location->relations.getEqual(param)) {
+            std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal);
+            // if compared pointer or equal belong to allocated area, this area
+            // can be marked valid
+            if (area) break;
+        }
+        // the compared value is not a pointer to an allocated area
+        if (! area) return;
+
+        llvm::ICmpInst::Predicate pred = assume->getAssumption() ?
+            icmp->getSignedPredicate() : icmp->getInversePredicate();
+
+        // check that predicate implies wanted relation
+        switch (pred) {
+            case llvm::ICmpInst::Predicate::ICMP_EQ:
+                // if reallocated pointer is equal to zero, then original memory is still valid
+                setValidArea(validAreas, area, index, false);
+                return;
+
+            case llvm::ICmpInst::Predicate::ICMP_NE:
+                // pointer is not equal to zero, therefore it a valid result of heap allocation
+                setValidArea(validAreas, area, index, true);
+                return;
+
+            case llvm::ICmpInst::Predicate::ICMP_ULE:
+            case llvm::ICmpInst::Predicate::ICMP_SLE:
+            case llvm::ICmpInst::Predicate::ICMP_ULT:
+            case llvm::ICmpInst::Predicate::ICMP_SLT:
+                // if zero stands right to </<=, this proves invalidity
+                if (c2) setValidArea(validAreas, area, index, false);
+                else setValidArea(validAreas, area, index, true);
+                return;
+
+            case llvm::ICmpInst::Predicate::ICMP_UGE:
+            case llvm::ICmpInst::Predicate::ICMP_SGE:
+            case llvm::ICmpInst::Predicate::ICMP_UGT:
+            case llvm::ICmpInst::Predicate::ICMP_SGT:
+                // if zero stands left to >/>=, this proves invalidity
+                if (c1) setValidArea(validAreas, area, index, false);
+                else setValidArea(validAreas, area, index, true);
+                return;
+
+            default:
+                assert(0 && "unreachable, would have failed in processICMP");
+        }
     }
 
     void setValidAreasFromSinglePredecessor(VRLocation* location, std::vector<bool>& validAreas) {
@@ -451,98 +581,22 @@ class StructureAnalyzer {
         VREdge* edge = location->predecessors[0];
         validAreas = edge->source->relations.getValidAreas();
 
-        unsigned index = 0;
-        const AllocatedArea* area = nullptr;
-
         // and alter them according to info from edge
-        if (edge->op->isInstruction()) {
+        if (edge->op->isInstruction())
+            setValidAreasByInstruction(location, validAreas, static_cast<VRInstruction *>(edge->op.get()));
 
-            const llvm::Instruction* inst = static_cast<VRInstruction *>(edge->op.get())->getInstruction();
-
-            // every allocated memory on stack is considered allocated successfully
-            if (llvm::isa<llvm::AllocaInst>(inst)) {
-                std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, inst); assert(area);
-                validAreas[index] = true;
-            }
-
-            // if came across lifetime_end call, then mark memory whose scope ended invalid
-            if (auto intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(inst)) {
-                if (intrinsic->getIntrinsicID() == llvm::Intrinsic::lifetime_end) {
-
-                    for (auto* equal : location->relations.getEqual(intrinsic->getOperand(1))) {
-                        if (llvm::isa<llvm::AllocaInst>(equal)) {
-                            std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal); assert(area);
-                            validAreas[index] = false;
-                        }
-                    }
-                }
-            }
-
-        // if heap allocation call was just checked as successful, mark memory valid
-        } else if (edge->op->isAssumeBool()) {
-            VRAssumeBool* assume = static_cast<VRAssumeBool *>(edge->op.get());
-
-            auto icmp = llvm::dyn_cast<llvm::ICmpInst>(assume->getValue());
-            if (! icmp) return;
-
-            auto c1 = llvm::dyn_cast<llvm::ConstantInt>(icmp->getOperand(0));
-            auto c2 = llvm::dyn_cast<llvm::ConstantInt>(icmp->getOperand(1));
-
-            // pointer must be compared to zero // TODO? or greater
-            if ((c1 && c2) || (! c1 && ! c2) || (! c1 && ! c2->isZero()) || (! c2 && ! c1->isZero())) return;
-
-            bool assumption = assume->getAssumption();
-            llvm::ICmpInst::Predicate pred = assumption ?
-                icmp->getSignedPredicate() : icmp->getInversePredicate();
-
-            // check that predicate implies wanted relation
-            switch (pred) {
-                case llvm::ICmpInst::Predicate::ICMP_EQ:
-                    // implied relation is equality to zero, this proves invalidity
-                    return;
-
-                case llvm::ICmpInst::Predicate::ICMP_NE:
-                    // with previous checks, NE will surely be sufficient
-                    break;
-
-                case llvm::ICmpInst::Predicate::ICMP_ULE:
-                case llvm::ICmpInst::Predicate::ICMP_SLE:
-                case llvm::ICmpInst::Predicate::ICMP_ULT:
-                case llvm::ICmpInst::Predicate::ICMP_SLT:
-                    // if zero stands right to </<=, this proves invalidity
-                    if (c2) return;
-                    break;
-
-                case llvm::ICmpInst::Predicate::ICMP_UGE:
-                case llvm::ICmpInst::Predicate::ICMP_SGE:
-                case llvm::ICmpInst::Predicate::ICMP_UGT:
-                case llvm::ICmpInst::Predicate::ICMP_SGT:
-                    // if zero stands left to >/>=, this proves invalidity
-                    if (c1) return;
-                    break;
-
-                default:
-                    assert(0 && "unreachable, would have failed in processICMP");
-            }
-
-            // get the value compared to zero
-            const llvm::Value* param = c1 ? icmp->getOperand(1) : icmp->getOperand(0);
-
-            for (auto equal : location->relations.getEqual(param)) {
-                std::tie(index, area) = getAllocatedAreaFor(allocatedAreas, equal);
-                // if compared pointer or equal belong to allocated area, this area
-                // can be marked valid
-                if (area) validAreas[index] = true;
-            }
-        }
+        if (edge->op->isAssumeBool())
+            setValidAreasByAssumeBool(location, validAreas, static_cast<VRAssumeBool*>(edge->op.get()));
     }
 
     bool trueInAll(const std::vector<VREdge*>& predecessors, unsigned index) {
         for (VREdge* predecessor : predecessors) {
-            if (predecessor->source->relations.getValidAreas().empty() && predecessor->type != EdgeType::BACK) return false;
-            //std::cerr << " oof" << std::endl;
-            //if (predecessor->type == EdgeType::FORWARD || predecessor->type == EdgeType::DEFAULT) return false;
-            if (predecessor->type != EdgeType::BACK && ! predecessor->source->relations.getValidAreas()[index])
+            if (predecessor->source->relations.getValidAreas().empty() && predecessor->type != EdgeType::BACK)
+                return false;
+            if (predecessor->source->relations.getValidAreas().empty() && predecessor->type == EdgeType::BACK)
+                continue;
+
+            if (! predecessor->source->relations.getValidAreas()[index])
                 return false;
         }
         return true;
@@ -551,8 +605,6 @@ class StructureAnalyzer {
     void setValidAreasFromMultiplePredecessors(VRLocation* location, std::vector<bool>& validAreas) {
         // intersect valid areas from predecessors
         for (unsigned i = 0; i < allocatedAreas.size(); ++i) {
-            //std::cerr << "about " << std::endl;
-            //std::cerr << location->predecessors[0]->source->relations.getValidAreas()[i] << std::endl;
             validAreas.push_back( trueInAll(location->predecessors, i) );
         }
     }
