@@ -955,15 +955,24 @@ private:
 
 		C highest = nullptr;
 		for (auto it = bucket->begin_down(buckets.size()); it != bucket->end_down(); ++it) {
-			for (const llvm::Value* val : it->bucket->getEqual()) {
+			C constant = getEqualConstant(it->bucket);
 
-				if (auto constant = llvm::dyn_cast<llvm::ConstantInt>(val)) {
-					if (! highest || constant->getValue().sgt(highest->getValue()))
-						highest = constant;
-				}
-			}
+			if (! highest || (constant && constant->getValue().sgt(highest->getValue())))
+				highest = constant;
 		}
 		return highest;
+	}
+
+	C getGreaterEqualBound(EqualityBucket* bucket) const {
+
+		C lowest = nullptr;
+		for (auto it = bucket->begin_up(buckets.size()); it != bucket->end_up(); ++it) {
+			C constant = getEqualConstant(it->bucket);
+
+			if (! lowest || (constant && constant->getValue().slt(lowest->getValue())))
+				lowest = constant;
+		}
+		return lowest;
 	}
 
 	std::vector<T> getDirectlyRelated(T val, bool goDown) const {
@@ -1232,55 +1241,98 @@ public:
 
 	bool isEqual(T lt, T rt) const {
 
-		if (! inGraph(lt) || ! inGraph(rt))
-			return false;
+		C constLt = llvm::dyn_cast<llvm::ConstantInt>(lt);
+		C constRt = llvm::dyn_cast<llvm::ConstantInt>(rt);
 
+		if (! inGraph(lt) && ! inGraph(rt))
+			return constLt && constRt
+				&& constLt->getValue() == constRt->getValue();
+
+		if (! inGraph(lt)) {
+			std::swap(lt, rt);
+			std::swap(constLt, constRt);
+		}
+		
+		if (! inGraph(rt)) {
+			assert(inGraph(lt));
+			C ltEqual = getEqualConstant(mapToBucket.at(lt));
+			if (! constRt || ! ltEqual) return false;
+			return constRt->getValue() == ltEqual->getValue();
+		}
+
+		assert(inGraph(lt) && inGraph(rt));
 		return isEqual(mapToBucket.at(lt), mapToBucket.at(rt));
 	}
 
 	bool isNonEqual(T lt, T rt) const {
 
-		if (! inGraph(lt) || ! inGraph(rt))
-			return false;
+		C constLt = llvm::dyn_cast<llvm::ConstantInt>(lt);
+		C constRt = llvm::dyn_cast<llvm::ConstantInt>(rt);
 
+		if (! inGraph(lt) && ! inGraph(rt))
+			return constLt && constRt
+				&& constLt->getValue() != constRt->getValue();
+
+		if (! inGraph(lt)) {
+			std::swap(lt, rt);
+			std::swap(constLt, constRt);
+		}
+
+		if (! inGraph(rt)) {
+			assert (inGraph(lt));
+			C ltEqual = getEqualConstant(mapToBucket.at(lt));
+			if (! constRt || ! ltEqual) return false;
+			return constRt->getValue() != ltEqual->getValue();
+		}
+
+		assert(inGraph(lt) && inGraph(rt));
 		return isNonEqual(mapToBucket.at(lt), mapToBucket.at(rt));
 	}
 
 	bool isLesser(T lt, T rt) const {
 
-		if (! inGraph(rt)) return false;
+		C constLt = llvm::dyn_cast<llvm::ConstantInt>(lt);
+		C constRt = llvm::dyn_cast<llvm::ConstantInt>(rt);
 
-		if (inGraph(lt)) {
-			const auto& rtEqBucket = mapToBucket.at(rt);
-			if (isLesser(mapToBucket.at(lt), rtEqBucket))
-				return true;
+		if (! inGraph(lt) && ! inGraph(rt))
+			return constLt && constRt
+				&& constLt->getValue().slt(constRt->getValue());
+
+		if (! inGraph(rt)) {
+			C constBound = getGreaterEqualBound(lt);
+			return constBound && constRt && constBound->getValue().slt(constRt->getValue());
 		}
-		
-		if (auto constLt = llvm::dyn_cast<llvm::ConstantInt>(lt)) {
+
+		if (! inGraph(lt)) {
 			C constBound = getLesserEqualBound(rt);
-			if (constBound && constLt->getValue().slt(constBound->getValue()))
-				return true;
+			return constLt && constBound && constLt->getValue().slt(constBound->getValue());
 		}
 
-		return false;
+		assert (inGraph(lt) && inGraph(rt));
+		return isLesser(mapToBucket.at(lt), mapToBucket.at(rt));
 	}
 
 	bool isLesserEqual(T lt, T rt) const {
 
-		if (! inGraph(rt)) return false;
+		C constLt = llvm::dyn_cast<llvm::ConstantInt>(lt);
+		C constRt = llvm::dyn_cast<llvm::ConstantInt>(rt);
 
-		if (inGraph(lt)) {
-			if (isLesserEqual(mapToBucket.at(lt), mapToBucket.at(rt)))
-				return true;
+		if (! inGraph(lt) && ! inGraph(rt))
+			return constLt && constRt
+				&& constLt->getValue().sle(constRt->getValue());
+
+		if (! inGraph(rt)) {
+			C constBound = getGreaterEqualBound(lt);
+			return constBound && constRt && constBound->getValue().sle(constRt->getValue());
 		}
-		
-		if (auto constLt = llvm::dyn_cast<llvm::ConstantInt>(lt)) {
+
+		if (! inGraph(lt)) {
 			C constBound = getLesserEqualBound(rt);
-			if (constBound && constLt->getValue().sle(constBound->getValue()))
-				return true;
+			return constLt && constBound && constLt->getValue().sle(constBound->getValue());
 		}
 
-		return false;
+		assert (inGraph(lt) && inGraph(rt));
+		return isLesserEqual(mapToBucket.at(lt), mapToBucket.at(rt));
 	}
 
 	bool hasConflictingRelation(T lt, T rt, Relation relation) const {
@@ -1396,8 +1448,14 @@ public:
 
 	C getLesserEqualBound(T val) const {
 
-		if (! inGraph(val)) return nullptr;
+		if (! inGraph(val)) return llvm::dyn_cast<llvm::ConstantInt>(val);
 		return getLesserEqualBound(mapToBucket.at(val));
+	}
+
+	C getGreaterEqualBound(T val) const {
+
+		if (! inGraph(val)) return llvm::dyn_cast<llvm::ConstantInt>(val);
+		return getGreaterEqualBound(mapToBucket.at(val));
 	}
 
 	std::vector<T> getAllValues() const {
