@@ -76,16 +76,26 @@ class RelationsAnalyzer {
 
     void forgetInvalidated(ValueRelations& graph, const llvm::Instruction* inst) const {
 
-        for (const llvm::Value* invalid : instructionInvalidates(graph, inst))
+        for (const llvm::Value* invalid : instructionInvalidatesFromGraph(graph, inst))
             graph.unsetAllLoadsByPtr(invalid);
     }
 
-    std::set<const llvm::Value*>
-    instructionInvalidates(const ValueRelations& graph,
-                           const llvm::Instruction* inst) const {
+    void addAndUnwrapLoads(
+            std::set<std::pair<const llvm::Value*, unsigned>>& writtenTo,
+            const llvm::Value* val) const {
+
+        unsigned depth = 0;
+        writtenTo.emplace(val, 0);
+        while (auto load = llvm::dyn_cast<llvm::LoadInst>(val)) {
+            writtenTo.emplace(load->getPointerOperand(), ++depth);
+            val = load->getPointerOperand();
+        }
+    }
+
+    std::set<std::pair<const llvm::Value*, unsigned>> instructionInvalidates(const llvm::Instruction* inst) const {
 
         if (! inst->mayWriteToMemory() && ! inst->mayHaveSideEffects())
-            return std::set<const llvm::Value*>();
+            return std::set<std::pair<const llvm::Value*, unsigned>>();
 
         if (auto intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(inst)) {
             switch(intrinsic->getIntrinsicID()) {
@@ -95,7 +105,7 @@ class RelationsAnalyzer {
                 case llvm::Intrinsic::stackrestore:
                 case llvm::Intrinsic::dbg_declare:
                 case llvm::Intrinsic::dbg_value:
-                    return std::set<const llvm::Value*>();
+                    return std::set<std::pair<const llvm::Value*, unsigned>>();
                 default: break;
             }
         }
@@ -103,31 +113,30 @@ class RelationsAnalyzer {
         if (auto call = llvm::dyn_cast<llvm::CallInst>(inst)) {
             auto function = call->getCalledFunction();
             if (function && safeFunctions.find(function->getName()) != safeFunctions.end())
-                return std::set<const llvm::Value*>();
+                return std::set<std::pair<const llvm::Value*, unsigned>>();
         }
 
-        if (! llvm::isa<llvm::StoreInst>(inst)) { // most probably CallInst
+        std::set<std::pair<const llvm::Value*, unsigned>> unsetAll = { {nullptr, 0} };
+
+        auto store = llvm::dyn_cast<llvm::StoreInst>(inst);
+        if (! store) // most probably CallInst
             // unable to presume anything about such instruction
+            return unsetAll;
 
-            std::set<const llvm::Value*> allFroms;
-            for (const auto& fromsValues : graph.getAllLoads()) {
-                allFroms.insert(fromsValues.first[0]);
-                // no need to add all froms, a sample is enough
-            }
-            return allFroms;
-        }
+        // if store writes to a fix location, it cannot be easily said which
+        // values it affects
+        if (llvm::isa<llvm::Constant>(store->getPointerOperand()))
+            return unsetAll;
 
-        std::set<const llvm::Value*> writtenTo;
-
-        auto store = llvm::cast<llvm::StoreInst>(inst);
         const llvm::Value* memoryPtr = stripCastsAndGEPs(store->getPointerOperand());
-        // TODO check against actual loads generation
-        // what if load information is stored about cast or gep?
 
+        std::set<std::pair<const llvm::Value*, unsigned>> writtenTo;
         // DANGER TODO unset everything in between too
-        writtenTo.insert(memoryPtr); // unset underlying memory
-        writtenTo.insert(store->getPointerOperand()); // unset pointer itself
+        addAndUnwrapLoads(writtenTo, memoryPtr); // unset underlying memory
+        addAndUnwrapLoads(writtenTo, store->getPointerOperand()); // unset pointer itself
+        
 
+        const ValueRelations& graph = locationMapping.at(store)->relations;
         if (! equivToAlloca(graph.getEqual(memoryPtr))) {
             // we can't tell, where the instruction writes to
             //     except that it can't be memory, that surely has no alias
@@ -135,7 +144,7 @@ class RelationsAnalyzer {
             for (const auto& fromsValues : graph.getAllLoads()) {
                 for (const llvm::Value* from : fromsValues.first) {
                     if (mayHaveAlias(llvm::cast<llvm::User>(from))) {
-                        writtenTo.insert(from);
+                        addAndUnwrapLoads(writtenTo, from);
                         break;
                     } // else we may remember this load
                 }
@@ -150,13 +159,56 @@ class RelationsAnalyzer {
             if (! equivToAlloca(fromsValues.first))
                 for (const llvm::Value* from : fromsValues.first) {
                     if (mayHaveAlias(llvm::cast<llvm::User>(from))) {
-                        writtenTo.insert(from);
+                        addAndUnwrapLoads(writtenTo, from);
                         break;
                     }
                 }
         }
 
         return writtenTo;
+    }
+
+    const llvm::Value* getInvalidatedPointer(
+            const ValueRelations& graph,
+            const llvm::Value* invalid,
+            unsigned depth) const {
+    
+        while (depth && invalid) {
+            const auto& values = graph.getValsByPtr(invalid);
+
+            if (values.empty()) {
+                invalid = nullptr; // invalidated pointer does not load anything in current graph
+            } else {
+                invalid = values[0];
+                --depth;
+            }
+        }
+        return graph.hasLoad(invalid) ? invalid : nullptr;
+    }
+
+    // returns set of values that have a load in given graph and are invalidated
+    // by the instruction
+    std::set<const llvm::Value*> instructionInvalidatesFromGraph(
+            const ValueRelations& graph,
+            const llvm::Instruction* inst) const {
+
+        const auto& indirectlyInvalid = instructionInvalidates(inst);
+
+        // go through all (indireclty) invalidated pointers and add those
+        // that occur in current location
+        std::set<const llvm::Value*> allInvalid;
+        for (const auto& pair : indirectlyInvalid) {
+            if (! pair.first) {
+                // add all loads in graph
+                for (auto& fromsValues : graph.getAllLoads())
+                    allInvalid.emplace(fromsValues.first[0]);
+                break;
+            }
+
+            auto directlyInvalid = getInvalidatedPointer(graph, pair.first, pair.second);
+            if (directlyInvalid) allInvalid.emplace(directlyInvalid);
+        }
+        return allInvalid;
     }
 
     static const llvm::Value* stripCastsAndGEPs(const llvm::Value* memoryPtr) {
@@ -684,16 +736,14 @@ class RelationsAnalyzer {
         // inside the loop
         if (location->isJustLoopJoin()) {
 
+            const ValueRelations& oldGraph = getTreePred(location)->relations;
+
             std::set<const llvm::Value*> allInvalid;
 
             for (const auto* inst : structure.getInloopValues(location)) {
-                const ValueRelations& graph = locationMapping.at(inst)->relations;
-                auto invalid = instructionInvalidates(graph, inst);
+                auto invalid = instructionInvalidatesFromGraph(oldGraph, inst);
                 allInvalid.insert(invalid.begin(), invalid.end());
             }
-
-            VRLocation* treePred = getTreePred(location);
-            const ValueRelations& oldGraph = treePred->relations;
 
             for (const auto& fromsValues : oldGraph.getAllLoads()) {
                 if (! anyInvalidated(allInvalid, fromsValues.first)) {
@@ -757,7 +807,9 @@ class RelationsAnalyzer {
         }
 
         // infer some invariants in loop
-        if (preds.size() == 2 && location->isJustLoopJoin()) {
+        if (preds.size() == 2 && location->isJustLoopJoin()
+                && preds[0]->relations.holdsAnyRelations()
+                && preds[1]->relations.holdsAnyRelations()) {
             for (const llvm::Value* from : froms) {
                 const auto& predEdges = location->predecessors;
 
@@ -781,7 +833,7 @@ class RelationsAnalyzer {
                 for (const auto* val : structure.getInloopValues(location)) {
 
                     const ValueRelations& relations = locationMapping.at(val)->relations;
-                    auto invalidated = instructionInvalidates(relations, val);
+                    auto invalidated = instructionInvalidatesFromGraph(relations, val);
                     if (invalidated.find(from) != invalidated.end()) break;
 
                     if (std::find(allRelated.begin(), allRelated.end(), val)
@@ -834,7 +886,7 @@ class RelationsAnalyzer {
                     // get all locations which influence value loaded from from
                     for (const llvm::Instruction* invalidating : structure.getInloopValues(location)) {
                         const ValueRelations& relations = locationMapping.at(invalidating)->relations;
-                        auto invalidated = instructionInvalidates(relations, invalidating);
+                        auto invalidated = instructionInvalidatesFromGraph(relations, invalidating);
 
                         if (invalidated.find(from) != invalidated.end()) {
                             locationsAfterInvalidating.emplace_back(locationMapping.at(invalidating)->getSuccLocations()[0]);

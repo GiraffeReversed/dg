@@ -1462,6 +1462,10 @@ public:
 		placeholderBuckets.erase(id);
 	}
 
+	bool holdsAnyRelations() const {
+		return ! buckets.empty();
+	}
+
 #ifndef NDEBUG
 	std::string strip(std::string str) const {
 		std::string result;
