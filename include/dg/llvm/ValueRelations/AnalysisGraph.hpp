@@ -175,16 +175,17 @@ public:
         return "true";
     }
 
-    AnalysisGraph(const llvm::Module& M, unsigned maxPass) : module(M) {
+    AnalysisGraph(const llvm::Module& M, unsigned maxPass)
+            : module(M), structure(module, locationMapping, blockMapping) {
         GraphBuilder gb(module, locationMapping, blockMapping);
         gb.build();
 
-        structure.analyzeBeforeRelationsAnalysis(module, locationMapping, blockMapping);
+        structure.analyzeBeforeRelationsAnalysis();
 
         RelationsAnalyzer ra(module, locationMapping, blockMapping, structure);
         ra.analyze(maxPass);
 
-        structure.analyzeAfterRelationsAnalysis(module, blockMapping);
+        structure.analyzeAfterRelationsAnalysis();
     }
 
     const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& getBlockMapping() const {

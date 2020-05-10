@@ -206,8 +206,10 @@ struct CallRelation {
 
 class StructureAnalyzer {
 
-    using LocationMap = std::map<const llvm::Instruction*, VRLocation*>;
-    using BlockMap = std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>;
+
+    const llvm::Module& module;
+    const std::map<const llvm::Instruction*, VRLocation*>& locationMapping;
+    const std::map<const llvm::BasicBlock*, std::unique_ptr<VRBBlock>>& blockMapping;
 
     // holds vector of instructions, which are processed on any path back to given location
     // is computed only for locations with more than one predecessor
@@ -228,8 +230,7 @@ class StructureAnalyzer {
 
     std::map<const llvm::Function*, std::vector<CallRelation>> callRelationsMap;
 
-    void categorizeEdges(const llvm::Module& module,
-                         const BlockMap& blockMapping) {
+    void categorizeEdges() {
         for (auto& function : module) {
             if (function.isDeclaration()) continue;
 
@@ -287,7 +288,7 @@ class StructureAnalyzer {
         }
     }
 
-    void findLoops(const LocationMap& locationMapping) {
+    void findLoops() {
         for (auto& pair : locationMapping) {
             auto& location = pair.second;
             std::vector<VREdge*>& predEdges = location->predecessors;
@@ -353,7 +354,7 @@ class StructureAnalyzer {
         return result;
     }
 
-    void initializeDefined(const llvm::Module& module, const BlockMap& blockMapping) {
+    void initializeDefined() {
 
         for (const llvm::Function& function : module) {
             if (function.isDeclaration()) continue;
@@ -400,7 +401,7 @@ class StructureAnalyzer {
         }
     }
 
-    void collectInstructionSet(const llvm::Module& module) {
+    void collectInstructionSet() {
         for (unsigned opcode : collected)
             instructionSets.emplace(opcode, std::set<const llvm::Instruction*>());
 
@@ -429,7 +430,7 @@ class StructureAnalyzer {
 
     }
 
-    void collectAllocatedAreas(const llvm::Module& module) {
+    void collectAllocatedAreas() {
         // compute allocated areas throughout the code
         for (const llvm::Function& function : module) {
             for (const llvm::BasicBlock& block : function) {
@@ -494,7 +495,7 @@ class StructureAnalyzer {
         }
 
         if (auto call = llvm::dyn_cast<llvm::CallInst>(inst)) {
-            auto function = call->getCalledFunction();
+            auto* function = call->getCalledFunction();
 
             if (! function) return;
 
@@ -621,31 +622,53 @@ class StructureAnalyzer {
             setValidAreasByAssumeBool(location, validAreas, static_cast<VRAssumeBool*>(edge->op.get()));
     }
 
-    bool trueInAll(const std::vector<VREdge*>& predecessors, unsigned index) const {
-        for (VREdge* predecessor : predecessors) {
-            if (predecessor->source->relations.getValidAreas().empty())
-                return false;
-
-            if (! predecessor->source->relations.getValidAreas()[index])
-                return false;
+    bool trueInAll(const std::vector<std::vector<bool>>& validInPreds, unsigned index) const {
+        for (const auto& validInPred : validInPreds) {
+            if (validInPred.empty() || ! validInPred[index]) return false;
         }
         return true;
     }
 
-    //std::vector<const llvm::Value*> getInvalidatedAreas()    
+    // in returned vector, false signifies that corresponding area is invalidated by some of the passed instructions
+    std::vector<bool> getInvalidatedAreas(const std::vector<const llvm::Instruction*>& instructions) const {
+        std::vector<bool> validAreas(allocatedAreas.size(), true);
+
+        for (const llvm::Instruction* inst : instructions) {
+            VRLocation* location = locationMapping.at(inst);
+            VRInstruction vrinst(inst);
+
+            setValidAreasByInstruction(location, validAreas, &vrinst);
+        }
+        return validAreas;
+    }
 
     void setValidAreasFromMultiplePredecessors(VRLocation* location, std::vector<bool>& validAreas) const {
-        if (! location->isJustLoopJoin()) {
-            // intersect valid areas from predecessors
-            for (unsigned i = 0; i < allocatedAreas.size(); ++i) {
-                validAreas.push_back( trueInAll(location->predecessors, i) );
-            }
-        } else {
+        std::vector<std::vector<bool>> validInPreds;
 
+        if (! location->isJustLoopJoin()) {
+            for (VREdge* predEdge : location->predecessors)
+                validInPreds.emplace_back(predEdge->source->relations.getValidAreas());
+        } else {
+            VRLocation* treePred = nullptr;
+            for (VREdge* predEdge : location->predecessors) {
+                if (predEdge->type == EdgeType::TREE) {
+                    treePred = predEdge->source;
+                    break;
+                }
+            }
+            assert(treePred);
+
+            validInPreds.emplace_back(treePred->relations.getValidAreas());
+            validInPreds.emplace_back(getInvalidatedAreas(inloopValues.at(location)));
+        }
+        
+        // intersect valid areas from predecessors
+        for (unsigned i = 0; i < allocatedAreas.size(); ++i) {
+            validAreas.push_back( trueInAll(validInPreds, i) );
         }
     }
 
-    void propagateAllocatedAreas(const llvm::Module& module, const BlockMap& blockMapping) const {
+    void computeValidAreas() const {
         for (const llvm::Function& function : module) {
             for (const llvm::BasicBlock& block : function) {
                 for (auto& location : blockMapping.at(&block)->locations) {
@@ -662,7 +685,7 @@ class StructureAnalyzer {
         }
     }
 
-    void initializeCallRelations(const llvm::Module& module, const LocationMap& locationMapping) {
+    void initializeCallRelations() {
         for (const llvm::Function& function : module) {
             if (function.isDeclaration())
                 continue;
@@ -698,20 +721,23 @@ class StructureAnalyzer {
     }
 
 public:
-    void analyzeBeforeRelationsAnalysis(const llvm::Module& m, const LocationMap& locs, const BlockMap& blcs) {
-        categorizeEdges(m, blcs);
-        findLoops(locs);
-        collectInstructionSet(m);
-        initializeCallRelations(m, locs);
+    StructureAnalyzer(
+            const llvm::Module& m,
+            const std::map<const llvm::Instruction*, VRLocation*>& locs,
+            const std::map<const llvm::BasicBlock*, std::unique_ptr<VRBBlock>>& blcs)
+        : module(m), locationMapping(locs), blockMapping(blcs) {};
+
+    void analyzeBeforeRelationsAnalysis() {
+        categorizeEdges();
+        findLoops();
+        collectInstructionSet();
+        initializeCallRelations();
         //initializeDefined(m, blcs);
     }
 
-    void analyzeAfterRelationsAnalysis(const llvm::Module& m, const BlockMap& blcs) {
-        collectAllocatedAreas(m);
-        propagateAllocatedAreas(m, blcs);
-        // propagate twice because of loops, it the first pass it is not known
-        // whether the loop invalidates any areas
-        propagateAllocatedAreas(m, blcs);
+    void analyzeAfterRelationsAnalysis() {
+        collectAllocatedAreas();
+        computeValidAreas();
     }
 
     bool isDefined(VRLocation* loc, const llvm::Value* val) const {
