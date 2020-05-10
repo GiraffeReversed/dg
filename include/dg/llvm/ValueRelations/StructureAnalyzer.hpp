@@ -453,6 +453,25 @@ class StructureAnalyzer {
         validAreas = std::vector<bool>(allocatedAreas.size(), false);
     }
 
+    std::pair<unsigned, const AllocatedArea*> getEqualArea(const ValueRelations& graph, const llvm::Value* ptr) const {
+        unsigned index = 0;
+        const AllocatedArea* area = nullptr;
+        for (auto* equal : graph.getEqual(ptr)) {
+            std::tie(index, area) = getAllocatedAreaFor(equal);
+            if (area) return { index, area };
+        }
+        return { 0, nullptr };
+    }
+
+    void invalidateHeapAllocatedAreas(std::vector<bool>& validAreas) const {
+        unsigned index = 0;
+        for (const AllocatedArea& area : allocatedAreas) {
+            if (llvm::isa<llvm::CallInst>(area.getPtr()))
+                validAreas[index] = false;
+            ++index;
+        }
+    }
+
     void setValidAreasByInstruction(VRLocation* location, std::vector<bool>& validAreas, VRInstruction* vrinst) const {
         const llvm::Instruction* inst = vrinst->getInstruction();
         unsigned index = 0;
@@ -468,12 +487,9 @@ class StructureAnalyzer {
         if (auto intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(inst)) {
             if (intrinsic->getIntrinsicID() == llvm::Intrinsic::lifetime_end) {
 
-                for (auto* equal : location->relations.getEqual(intrinsic->getOperand(1))) {
-                    if (llvm::isa<llvm::AllocaInst>(equal)) {
-                        std::tie(index, area) = getAllocatedAreaFor(equal); assert(area);
-                        validAreas[index] = false;
-                    }
-                }
+                std::tie(index, area) = getEqualArea(location->relations, intrinsic->getOperand(1));
+                assert(area);
+                validAreas[index] = false;
             }
         }
 
@@ -485,17 +501,23 @@ class StructureAnalyzer {
             if (function->getName().equals("realloc")) {
                 // if realloc of memory occured, the reallocated memory cannot be considered valid
                 // until the realloc is proven unsuccessful
-                for (auto* equal : location->relations.getEqual(call->getOperand(0))) {
-                    std::tie(index, area) = getAllocatedAreaFor(equal);
-                    if (area) validAreas[index] = false;
+                std::tie(index, area) = getEqualArea(location->relations, call->getOperand(0));
+                if (area) validAreas[index] = false;
+                else if (! llvm::isa<llvm::ConstantPointerNull>(call->getOperand(0))) {
+                    // else we do not know which area has been reallocated and thus possibly invalidated,
+                    // so it may have been any of them
+                    invalidateHeapAllocatedAreas(validAreas);
                 }
             }
 
             if (function->getName().equals("free")) {
                 // if free occures, the freed memory cannot be considered valid anymore
-                for (auto* equal : location->relations.getEqual(call->getOperand(0))) {
-                    std::tie(index, area) = getAllocatedAreaFor(equal);
-                    if (area) validAreas[index] = false;
+                std::tie(index, area) = getEqualArea(location->relations, call->getOperand(0));
+
+                if (area) validAreas[index] = false;
+                else if (! llvm::isa<llvm::ConstantPointerNull>(call->getOperand(0))) {
+                    // else we do not know which area has been freed, so it may have been any of them
+                    invalidateHeapAllocatedAreas(validAreas);
                 }
             }
         }
@@ -559,8 +581,6 @@ class StructureAnalyzer {
                 setValidArea(validAreas, area, index, true);
                 return;
 
-            case llvm::ICmpInst::Predicate::ICMP_ULE:
-            case llvm::ICmpInst::Predicate::ICMP_SLE:
             case llvm::ICmpInst::Predicate::ICMP_ULT:
             case llvm::ICmpInst::Predicate::ICMP_SLT:
                 // if zero stands right to </<=, this proves invalidity
@@ -568,8 +588,6 @@ class StructureAnalyzer {
                 else setValidArea(validAreas, area, index, true);
                 return;
 
-            case llvm::ICmpInst::Predicate::ICMP_UGE:
-            case llvm::ICmpInst::Predicate::ICMP_SGE:
             case llvm::ICmpInst::Predicate::ICMP_UGT:
             case llvm::ICmpInst::Predicate::ICMP_SGT:
                 // if zero stands left to >/>=, this proves invalidity
@@ -577,12 +595,20 @@ class StructureAnalyzer {
                 else setValidArea(validAreas, area, index, true);
                 return;
 
+            case llvm::ICmpInst::Predicate::ICMP_ULE:
+            case llvm::ICmpInst::Predicate::ICMP_SLE:
+            case llvm::ICmpInst::Predicate::ICMP_UGE:
+            case llvm::ICmpInst::Predicate::ICMP_SGE:
+                // nothing to infer here, we do not get the information, whether
+                // pointer is zero or not
+                return;
+
             default:
                 assert(0 && "unreachable, would have failed in processICMP");
         }
     }
 
-    void setValidAreasFromSinglePredecessor(VRLocation* location, std::vector<bool>& validAreas) {
+    void setValidAreasFromSinglePredecessor(VRLocation* location, std::vector<bool>& validAreas) const {
         // copy predecessors valid areas
         VREdge* edge = location->predecessors[0];
         validAreas = edge->source->relations.getValidAreas();
@@ -595,12 +621,10 @@ class StructureAnalyzer {
             setValidAreasByAssumeBool(location, validAreas, static_cast<VRAssumeBool*>(edge->op.get()));
     }
 
-    bool trueInAll(const std::vector<VREdge*>& predecessors, unsigned index) {
+    bool trueInAll(const std::vector<VREdge*>& predecessors, unsigned index) const {
         for (VREdge* predecessor : predecessors) {
-            if (predecessor->source->relations.getValidAreas().empty() && predecessor->type != EdgeType::BACK)
+            if (predecessor->source->relations.getValidAreas().empty())
                 return false;
-            if (predecessor->source->relations.getValidAreas().empty() && predecessor->type == EdgeType::BACK)
-                continue;
 
             if (! predecessor->source->relations.getValidAreas()[index])
                 return false;
@@ -608,14 +632,20 @@ class StructureAnalyzer {
         return true;
     }
 
-    void setValidAreasFromMultiplePredecessors(VRLocation* location, std::vector<bool>& validAreas) {
-        // intersect valid areas from predecessors
-        for (unsigned i = 0; i < allocatedAreas.size(); ++i) {
-            validAreas.push_back( trueInAll(location->predecessors, i) );
+    //std::vector<const llvm::Value*> getInvalidatedAreas()    
+
+    void setValidAreasFromMultiplePredecessors(VRLocation* location, std::vector<bool>& validAreas) const {
+        if (! location->isJustLoopJoin()) {
+            // intersect valid areas from predecessors
+            for (unsigned i = 0; i < allocatedAreas.size(); ++i) {
+                validAreas.push_back( trueInAll(location->predecessors, i) );
+            }
+        } else {
+
         }
     }
 
-    void propagateAllocatedAreas(const llvm::Module& module, const BlockMap& blockMapping) {
+    void propagateAllocatedAreas(const llvm::Module& module, const BlockMap& blockMapping) const {
         for (const llvm::Function& function : module) {
             for (const llvm::BasicBlock& block : function) {
                 for (auto& location : blockMapping.at(&block)->locations) {
