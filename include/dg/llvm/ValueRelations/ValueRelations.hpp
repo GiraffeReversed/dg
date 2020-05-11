@@ -840,16 +840,16 @@ private:
 		if (rtEqBucket->subtreeContains(ltEqBucket, buckets.size(), true).second) return true;
 
 		C ltConst = getEqualConstant(ltEqBucket);
-		C rtBound = getLesserEqualBound(rtEqBucket);
+		C rtBound = getLowerBound(rtEqBucket, true);
 
-		return ltConst && rtBound && ltConst->getValue().slt(rtBound->getValue());
+		return ltConst && rtBound && ltConst->getValue().sle(rtBound->getValue());
 	}
 
 	bool isLesserEqual(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
 		if (rtEqBucket->subtreeContains(ltEqBucket, buckets.size(), false).second) return true;
 
 		C ltConst = getEqualConstant(ltEqBucket);
-		C rtBound = getLesserEqualBound(rtEqBucket);
+		C rtBound = getLowerBound(rtEqBucket, false);
 
 		return ltConst && rtBound && ltConst->getValue().sle(rtBound->getValue());
 	}
@@ -951,25 +951,27 @@ private:
 			eraseBucketIfUnrelated(bucket);
 	}
 
-	C getLesserEqualBound(EqualityBucket* bucket) const {
+	C getLowerBound(EqualityBucket* bucket, bool strict) const {
 
 		C highest = nullptr;
 		for (auto it = bucket->begin_down(buckets.size()); it != bucket->end_down(); ++it) {
 			C constant = getEqualConstant(it->bucket);
 
-			if (! highest || (constant && constant->getValue().sgt(highest->getValue())))
+			if ((! strict || it->relation == Relation::LT) // ignore strict values if demanded
+			 && (! highest || (constant && constant->getValue().sgt(highest->getValue()))))
 				highest = constant;
 		}
 		return highest;
 	}
 
-	C getGreaterEqualBound(EqualityBucket* bucket) const {
+	C getUpperBound(EqualityBucket* bucket, bool strict) const {
 
 		C lowest = nullptr;
 		for (auto it = bucket->begin_up(buckets.size()); it != bucket->end_up(); ++it) {
 			C constant = getEqualConstant(it->bucket);
 
-			if (! lowest || (constant && constant->getValue().slt(lowest->getValue())))
+			if ((! strict || it->relation == Relation::GT)
+			 && (! lowest || (constant && constant->getValue().slt(lowest->getValue()))))
 				lowest = constant;
 		}
 		return lowest;
@@ -1299,13 +1301,13 @@ public:
 				&& constLt->getValue().slt(constRt->getValue());
 
 		if (! inGraph(rt)) {
-			C constBound = getGreaterEqualBound(lt);
-			return constBound && constRt && constBound->getValue().slt(constRt->getValue());
+			C constBound = getUpperBound(mapToBucket.at(lt), true);
+			return constBound && constRt && constBound->getValue().sle(constRt->getValue());
 		}
 
 		if (! inGraph(lt)) {
-			C constBound = getLesserEqualBound(rt);
-			return constLt && constBound && constLt->getValue().slt(constBound->getValue());
+			C constBound = getLowerBound(mapToBucket.at(rt), true);
+			return constLt && constBound && constLt->getValue().sle(constBound->getValue());
 		}
 
 		assert (inGraph(lt) && inGraph(rt));
@@ -1322,12 +1324,12 @@ public:
 				&& constLt->getValue().sle(constRt->getValue());
 
 		if (! inGraph(rt)) {
-			C constBound = getGreaterEqualBound(lt);
+			C constBound = getUpperBound(mapToBucket.at(lt), false);
 			return constBound && constRt && constBound->getValue().sle(constRt->getValue());
 		}
 
 		if (! inGraph(lt)) {
-			C constBound = getLesserEqualBound(rt);
+			C constBound = getLowerBound(mapToBucket.at(rt), false);
 			return constLt && constBound && constLt->getValue().sle(constBound->getValue());
 		}
 
@@ -1449,13 +1451,13 @@ public:
 	C getLesserEqualBound(T val) const {
 
 		if (! inGraph(val)) return llvm::dyn_cast<llvm::ConstantInt>(val);
-		return getLesserEqualBound(mapToBucket.at(val));
+		return getLowerBound(mapToBucket.at(val), false);
 	}
 
 	C getGreaterEqualBound(T val) const {
 
 		if (! inGraph(val)) return llvm::dyn_cast<llvm::ConstantInt>(val);
-		return getGreaterEqualBound(mapToBucket.at(val));
+		return getUpperBound(mapToBucket.at(val), false);
 	}
 
 	std::vector<T> getAllValues() const {
