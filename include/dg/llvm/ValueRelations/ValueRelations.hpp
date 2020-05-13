@@ -152,14 +152,6 @@ class EqualityBucket {
 
 		RelatedBucket current;
 
-		struct Frame {
-			EqualityBucket* bucket;
-			typename BucketPtrSet::iterator it;
-
-			Frame(EqualityBucket* b, typename BucketPtrSet::iterator i)
-				: bucket(b), it(i) {}
-		};
-
 		void computeSetsForStrict(
 				EqualityBucket* strictlyRelated,
 				std::set<EqualityBucket*>& strict,
@@ -197,13 +189,13 @@ class EqualityBucket {
 			std::map<EqualityBucket*, BucketPtrSet> nonStrictlyRelatedMap;
 
 			BucketPtrSet visited;
-			std::stack<Frame> stack;
+			std::stack<DFSFrame> stack;
 
 			stack.emplace(start, goDown ? start->lesser.begin() : start->parents.begin());
 			visited.emplace(start);
 
 			while (! stack.empty()) {
-				Frame frame = stack.top();
+				DFSFrame frame = stack.top();
 				stack.pop();
 
 				if (goDown && frame.it == frame.bucket->lesser.end())
@@ -267,6 +259,15 @@ class EqualityBucket {
 		}
 
 public:
+
+		struct DFSFrame {
+			EqualityBucket* bucket;
+			typename BucketPtrSet::iterator it;
+
+			DFSFrame(EqualityBucket* b, typename BucketPtrSet::iterator i)
+				: bucket(b), it(i) {}
+		};
+
 		BucketIterator() = default;
 		BucketIterator(EqualityBucket* s, bool down, bool strict, bool begin)
 		: goDown(down), toFirstStrict(strict), start(s), current(start, Relation::EQ) {
@@ -321,46 +322,6 @@ public:
 			return preInc;
 		}
 
-		std::vector<EqualityBucket*> getLesserEqualPath(EqualityBucket* bucket) const {
-			std::vector<EqualityBucket*> result;
-
-			BucketPtrSet visited;
-			std::stack<Frame> stack;
-
-			stack.emplace(start, start->lesserEqual.begin());
-			visited.emplace(start);
-
-			while (! stack.empty()) {
-				Frame frame = stack.top();
-				stack.pop();
-
-				// if we found the searched bucket, reconstruct the path and return
-				if (frame.bucket == bucket) {
-					std::vector<EqualityBucket*> result;
-					result.emplace_back(bucket);
-
-					while (! stack.empty()) {
-						frame = stack.top();
-						stack.pop();
-						result.emplace_back(frame.bucket);
-					}
-					return result;
-				}
-
-				if (frame.it == frame.bucket->lesserEqual.end()) continue;
-
-				// plan visit for the next successor
-				stack.emplace(frame.bucket, std::next(frame.it));
-
-				// plan visit to the current successor
-				if (visited.find(*frame.it) == visited.end()) {
-					visited.emplace(*frame.it);
-					stack.emplace(*frame.it, (*frame.it)->lesserEqual.begin());
-				}
-			}
-
-			assert(0 && "unreachable");
-		}
 	};
 
 	BucketIterator begin_down() {
@@ -397,7 +358,7 @@ public:
 		return BucketIterator(this, false, true, false);
 	}
 
-	std::pair<std::vector<EqualityBucket*>, bool> subtreeContains(
+	bool subtreeContains(
 			EqualityBucket* needle,
 			bool ignoreLE) {
 
@@ -406,16 +367,52 @@ public:
 			if (it->bucket == needle) {
 				if (ignoreLE && it->relation != Relation::LT) break;
 				// else we found searched bucket
+				return true;
+			}
+		}
+		return false;
+	}
 
-				std::vector<EqualityBucket*> pathToThis;
-				
-				if (it->relation == Relation::LE) pathToThis = it.getLesserEqualPath(needle);
+	// return path from bucket to this
+	std::vector<EqualityBucket*> getLesserEqualPath(EqualityBucket* bucket) {
+		std::vector<EqualityBucket*> result;
 
-				return { pathToThis, true };
+		BucketPtrSet visited;
+		std::stack<BucketIterator::DFSFrame> stack;
+
+		stack.emplace(this, lesserEqual.begin());
+		visited.emplace(this);
+
+		while (! stack.empty()) {
+			BucketIterator::DFSFrame frame = stack.top();
+			stack.pop();
+
+			// if we found the searched bucket, reconstruct the path and return
+			if (frame.bucket == bucket) {
+				std::vector<EqualityBucket*> result;
+				result.emplace_back(bucket);
+
+				while (! stack.empty()) {
+					frame = stack.top();
+					stack.pop();
+					result.emplace_back(frame.bucket);
+				}
+				return result;
+			}
+
+			if (frame.it == frame.bucket->lesserEqual.end()) continue;
+
+			// plan visit for the next successor
+			stack.emplace(frame.bucket, std::next(frame.it));
+
+			// plan visit to the current successor
+			if (visited.find(*frame.it) == visited.end()) {
+				visited.emplace(*frame.it);
+				stack.emplace(*frame.it, (*frame.it)->lesserEqual.begin());
 			}
 		}
 
-		return { std::vector<EqualityBucket*>(), false };
+		assert(0 && "unreachable");
 	}
 
 	void mergeConnections(const EqualityBucket& other) {
@@ -733,9 +730,9 @@ private:
 		// else handle lesserEqual specializing to equal
 		std::vector<EqualityBucket*> toMerge;
 		if (isLesserEqual(newBucketPtr, oldBucketPtr)) {
-			toMerge = oldBucketPtr->subtreeContains(newBucketPtr, false).first;
+			toMerge = oldBucketPtr->getLesserEqualPath(newBucketPtr);
 		} else {
-			toMerge = newBucketPtr->subtreeContains(oldBucketPtr, false).first;
+			toMerge = newBucketPtr->getLesserEqualPath(oldBucketPtr);
 		}
 
 		// unset unnecessary lesserEqual relations
@@ -905,11 +902,11 @@ private:
 	}
 
 	bool isLesser(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
-		return rtEqBucket->subtreeContains(ltEqBucket, true).second;
+		return rtEqBucket->subtreeContains(ltEqBucket, true);
 	}
 
 	bool isLesserEqual(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
-		return rtEqBucket->subtreeContains(ltEqBucket, false).second;
+		return rtEqBucket->subtreeContains(ltEqBucket, false);
 	}
 
 	// in case of LOAD, rt is the from and lt is val
