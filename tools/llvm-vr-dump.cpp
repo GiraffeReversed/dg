@@ -117,11 +117,12 @@ int main(int argc, char *argv[])
         for (const auto& block : vr.getBlockMapping()) {
             for (const auto& loc : block.second->locations) {
                 for (const auto& succ : loc->successors) {
-                    std::cout << "  NODE" << loc->id;
                     if (succ->target)
-                        std::cout << " -> NODE" << succ->target->id;
-                    else
-                        std::cout << " -> DUMMY_NODE " << ++dummyIndex;
+                        std::cout << "  NODE" << loc->id << " -> NODE" << succ->target->id;
+                    else {
+                        std::cout << "DUMMY_NODE" << ++dummyIndex << std::endl;
+                        std::cout << "  NODE" << loc->id << " -> DUMMY_NODE" << dummyIndex;
+                    }
                     std::cout << " [label=\"";
                     succ->op->dump();
                     std::cout << "\"];\n";
