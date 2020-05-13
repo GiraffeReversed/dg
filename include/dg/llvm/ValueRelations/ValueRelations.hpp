@@ -1013,7 +1013,7 @@ private:
 			C constant = getEqualConstant(it->bucket);
 
 			if ((! strict || it->relation == Relation::LT) // ignore strict values if demanded
-			 && (! highest || (constant && constant->getValue().sgt(highest->getValue()))))
+			 && (! highest || (constant && constant->getSExtValue() > highest->getSExtValue())))
 				highest = constant;
 		}
 		return highest;
@@ -1026,7 +1026,7 @@ private:
 			C constant = getEqualConstant(it->bucket);
 
 			if ((! strict || it->relation == Relation::GT)
-			 && (! lowest || (constant && constant->getValue().slt(lowest->getValue()))))
+			 && (! lowest || (constant && constant->getSExtValue() < lowest->getSExtValue())))
 				lowest = constant;
 		}
 		return lowest;
@@ -1337,7 +1337,7 @@ public:
 
 		if (! inGraph(lt) && ! inGraph(rt))
 			return constLt && constRt
-				&& constLt->getValue() == constRt->getValue();
+				&& constLt->getSExtValue() == constRt->getSExtValue();
 
 		if (! inGraph(lt)) {
 			std::swap(lt, rt);
@@ -1348,7 +1348,7 @@ public:
 			assert(inGraph(lt));
 			C ltEqual = getEqualConstant(mapToBucket.at(lt));
 			if (! constRt || ! ltEqual) return false;
-			return constRt->getValue() == ltEqual->getValue();
+			return constRt->getSExtValue() == ltEqual->getSExtValue();
 		}
 
 		assert(inGraph(lt) && inGraph(rt));
@@ -1362,7 +1362,7 @@ public:
 
 		if (! inGraph(lt) && ! inGraph(rt))
 			return constLt && constRt
-				&& constLt->getValue() != constRt->getValue();
+				&& constLt->getSExtValue() != constRt->getSExtValue();
 
 		if (! inGraph(lt)) {
 			std::swap(lt, rt);
@@ -1373,7 +1373,7 @@ public:
 			assert (inGraph(lt));
 			C ltEqual = getEqualConstant(mapToBucket.at(lt));
 			if (! constRt || ! ltEqual) return false;
-			return constRt->getValue() != ltEqual->getValue();
+			return constRt->getSExtValue() != ltEqual->getSExtValue();
 		}
 
 		assert(inGraph(lt) && inGraph(rt));
@@ -1387,16 +1387,16 @@ public:
 
 		if (! inGraph(lt) && ! inGraph(rt))
 			return constLt && constRt
-				&& constLt->getValue().slt(constRt->getValue());
+				&& constLt->getSExtValue() < constRt->getSExtValue();
 
 		if (! inGraph(rt)) {
 			C constBound = getUpperBound(mapToBucket.at(lt), true);
-			return constBound && constRt && constBound->getValue().sle(constRt->getValue());
+			return constBound && constRt && constBound->getSExtValue() <= constRt->getSExtValue();
 		}
 
 		if (! inGraph(lt)) {
 			C constBound = getLowerBound(mapToBucket.at(rt), true);
-			return constLt && constBound && constLt->getValue().sle(constBound->getValue());
+			return constLt && constBound && constLt->getSExtValue() <= constBound->getSExtValue();
 		}
 
 		assert (inGraph(lt) && inGraph(rt));
@@ -1410,16 +1410,16 @@ public:
 
 		if (! inGraph(lt) && ! inGraph(rt))
 			return constLt && constRt
-				&& constLt->getValue().sle(constRt->getValue());
+				&& constLt->getSExtValue() <= constRt->getSExtValue();
 
 		if (! inGraph(rt)) {
 			C constBound = getUpperBound(mapToBucket.at(lt), false);
-			return constBound && constRt && constBound->getValue().sle(constRt->getValue());
+			return constBound && constRt && constBound->getSExtValue() <= constRt->getSExtValue();
 		}
 
 		if (! inGraph(lt)) {
 			C constBound = getLowerBound(mapToBucket.at(rt), false);
-			return constLt && constBound && constLt->getValue().sle(constBound->getValue());
+			return constLt && constBound && constLt->getSExtValue() <= constBound->getSExtValue();
 		}
 
 		assert (inGraph(lt) && inGraph(rt));
