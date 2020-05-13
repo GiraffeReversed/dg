@@ -3,7 +3,7 @@
 
 #include <set>
 #include <map>
-#include <queue>
+#include <stack>
 #include <vector>
 #include <tuple>
 #include <memory>
@@ -120,160 +120,199 @@ class EqualityBucket {
 
 	std::vector<T> equalities;
 
-	struct HeapElem {
+	struct RelatedBucket {
 		EqualityBucket* bucket;
-		EqualityBucket* predecessor;
-		unsigned distance;
 		Relation relation;
 
-		HeapElem() = default;
-		HeapElem(EqualityBucket* b, EqualityBucket* p, unsigned d, Relation r)
-			: bucket(b), predecessor(p), distance(d), relation(r) {}
+		RelatedBucket(): bucket(nullptr), relation(Relation::EQ) {}
 
-		friend bool operator==(const HeapElem& lt, const HeapElem& rt) {
-			return lt.distance == rt.distance;
+		RelatedBucket(EqualityBucket* b, Relation r): bucket(b), relation(r) {}
+
+		friend bool operator==(const RelatedBucket& lt, const RelatedBucket& rt) {
+			return lt.bucket == rt.bucket && lt.relation == rt.relation;
 		}
 
-		friend bool operator!=(const HeapElem& lt, const HeapElem& rt) {
+		friend bool operator!=(const RelatedBucket& lt, const RelatedBucket& rt) {
 			return ! (lt == rt);
-		}
-
-		// the lowest HeapElem is the one with the highest distance
-		friend bool operator<(const HeapElem& lt, const HeapElem& rt) {
-			return lt.distance > rt.distance;
-		}
-
-		friend bool operator>=(const HeapElem& lt, const HeapElem& rt) {
-			return ! (lt < rt);
-		}
-
-		friend bool operator>(const HeapElem& lt, const HeapElem& rt) {
-			return rt < lt;
-		}
-
-		friend bool operator<=(const HeapElem& lt, const HeapElem& rt) {
-			return ! (rt < lt);
-		}
-
-		friend void swap(HeapElem& lt, HeapElem& rt) {
-			using std::swap;
-
-			swap(lt.bucket, rt.bucket);
-			swap(lt.predecessor, rt.predecessor);
-			swap(lt.distance, rt.distance);
-			swap(lt.relation, rt.relation);
 		}
 	};
 
-	struct BucketIterator {
+	class BucketIterator {
 
-		using value_type = HeapElem;
-		using iterator_category = std::forward_iterator_tag;
-		using difference_type = std::ptrdiff_t;
-
-		std::vector<HeapElem> heap;
-		std::map<EqualityBucket*, EqualityBucket*> predecessors;
-		std::map<EqualityBucket*, HeapElem> mapToElem;
-		unsigned totalNodes;
+		using value_type = RelatedBucket;
 		bool goDown = false;
 		bool toFirstStrict = false;
-		
+
+		std::vector<EqualityBucket*> strictlyRelated;
+		std::vector<EqualityBucket*> nonStrictlyRelated;
+
+		EqualityBucket* start;
+		unsigned index = 0;
+		bool inStrict = true;
+
+		RelatedBucket current;
+
+		struct Frame {
+			EqualityBucket* bucket;
+			typename BucketPtrSet::iterator it;
+
+			Frame(EqualityBucket* b, typename BucketPtrSet::iterator i)
+				: bucket(b), it(i) {}
+		};
+
+		void computeSetsForStrict(
+				EqualityBucket* strictlyRelated,
+				std::set<EqualityBucket*>& strict,
+				const std::map<EqualityBucket*, BucketPtrSet>& nonStrictlyRelatedMap,
+				const std::map<EqualityBucket*, BucketPtrSet>& strictlyRelatedMap) {
+
+			auto& succNonStrict = nonStrictlyRelatedMap.at(strictlyRelated);
+			if (! toFirstStrict) strict.insert(succNonStrict.begin(), succNonStrict.end());
+
+			auto& succStrict = strictlyRelatedMap.at(strictlyRelated);
+			strict.insert(succStrict.begin(), succStrict.end());
+
+			strict.emplace(strictlyRelated);
+		}
+
+		void computeSetsForNonStrict(
+				EqualityBucket* nonStrictlyRelated,
+				std::set<EqualityBucket*>& nonStrict,
+				std::set<EqualityBucket*>& strict,
+				const std::map<EqualityBucket*, BucketPtrSet>& nonStrictlyRelatedMap) {
+
+			// stop if the bucket is already considered strictly related
+			if (strict.find(nonStrictlyRelated) != strict.end()) return;
+
+			for (EqualityBucket* nonStrictRelated : nonStrictlyRelatedMap.at(nonStrictlyRelated)) {
+				// add nonStrict related bucket only if it is not already considered strictly related
+				if (strict.find(nonStrictRelated) == strict.end())
+					nonStrict.emplace(nonStrictRelated);
+			}
+			nonStrict.emplace(nonStrictlyRelated);
+		}
+
+		void computeRelated() {
+			std::map<EqualityBucket*, BucketPtrSet> strictlyRelatedMap;
+			std::map<EqualityBucket*, BucketPtrSet> nonStrictlyRelatedMap;
+
+			BucketPtrSet visited;
+			std::stack<Frame> stack;
+
+			stack.emplace(start, goDown ? start->lesser.begin() : start->parents.begin());
+			visited.emplace(start);
+
+			while (! stack.empty()) {
+				Frame frame = stack.top();
+				stack.pop();
+
+				if (goDown && frame.it == frame.bucket->lesser.end())
+					frame.it = frame.bucket->lesserEqual.begin();
+
+				if ((goDown && frame.it == frame.bucket->lesserEqual.end()) 
+						|| (! goDown && frame.it == frame.bucket->parents.end())) {
+					// in post order compute the set of strictly related buckets
+					// from the sets in its successors
+					auto itNonStrict = nonStrictlyRelatedMap.emplace(frame.bucket, std::set<EqualityBucket*>()).first;
+					auto itStrict = strictlyRelatedMap.emplace(frame.bucket, std::set<EqualityBucket*>()).first;
+					std::set<EqualityBucket*>& nonStrict = itNonStrict->second;
+					std::set<EqualityBucket*>& strict = itStrict->second;
+
+					if (goDown) {
+						for (EqualityBucket* lesser : frame.bucket->lesser)
+							computeSetsForStrict(lesser, strict, nonStrictlyRelatedMap, strictlyRelatedMap);
+
+						for (EqualityBucket* lesserEqual : frame.bucket->lesserEqual) {
+							auto& strictSucc = strictlyRelatedMap.at(lesserEqual);
+							strict.insert(strictSucc.begin(), strictSucc.end());
+						}
+
+						for (EqualityBucket* lesserEqual : frame.bucket->lesserEqual)
+							computeSetsForNonStrict(lesserEqual, nonStrict, strict, nonStrictlyRelatedMap);
+
+					} else {
+						for (EqualityBucket* parent : frame.bucket->parents) {
+							if (parent->lesser.find(frame.bucket) != parent->lesser.end())
+								computeSetsForStrict(parent, strict, nonStrictlyRelatedMap, strictlyRelatedMap);
+							else { // else this bucket is lesserEqual to parent
+								auto& strictSucc = strictlyRelatedMap.at(parent);
+								strict.insert(strictSucc.begin(), strictSucc.end());
+							}
+						}
+
+						for (EqualityBucket* parent : frame.bucket->parents) {
+							if (parent->lesserEqual.find(frame.bucket) != parent->lesserEqual.end())
+								computeSetsForNonStrict(parent, nonStrict, strict, nonStrictlyRelatedMap);
+						}
+					}
+
+					continue;
+				}
+
+				// plan visit for the next successor
+				stack.emplace(frame.bucket, std::next(frame.it));
+
+				// plan visit to the current successor
+				if (visited.find(*frame.it) == visited.end()) {
+					visited.emplace(*frame.it);
+					if (goDown) stack.emplace(*frame.it, (*frame.it)->lesser.begin());
+					else stack.emplace(*frame.it, (*frame.it)->parents.begin());
+				}
+			}
+			const auto& strictSet = strictlyRelatedMap.at(start);
+			strictlyRelated.insert(strictlyRelated.end(), strictSet.begin(), strictSet.end());
+
+			const auto& nonStrictSet = nonStrictlyRelatedMap.at(start);
+			nonStrictlyRelated.insert(nonStrictlyRelated.end(), nonStrictSet.begin(), nonStrictSet.end());
+		}
+
+public:
 		BucketIterator() = default;
-		BucketIterator(EqualityBucket* start, unsigned total, bool down, bool strict, bool begin)
-		: totalNodes(total), goDown(down), toFirstStrict(strict) {
-			if (! begin) return;
-			
-			HeapElem elem(start, nullptr, 0, Relation::EQ);
-			heap.emplace_back(elem);
-			predecessors.emplace(start, nullptr);
+		BucketIterator(EqualityBucket* s, bool down, bool strict, bool begin)
+		: goDown(down), toFirstStrict(strict), start(s), current(start, Relation::EQ) {
+			if (! begin) {
+				current = RelatedBucket(nullptr, Relation::EQ);
+				return;
+			}
+
+			computeRelated();
 		}
 
 		friend bool operator==(const BucketIterator& lt, const BucketIterator& rt) {
 			return lt.goDown == rt.goDown
 				&& lt.toFirstStrict == rt.toFirstStrict
-				&& lt.heap == rt.heap;
+				&& lt.current == rt.current;
 		}
 
 		friend bool operator!=(const BucketIterator& lt, const BucketIterator& rt) {
 			return ! (lt == rt);
 		}
 
-		const value_type& operator*() const { return heap[0]; }
-		const value_type* operator->() const { return &heap[0]; }
+		const value_type& operator*() const { return current; }
+		const value_type* operator->() const { return &current; }
 
-		value_type operator*() { return heap[0]; }
-		value_type* operator->() { return &heap[0]; }
+		value_type operator*() { return current; }
+		value_type* operator->() { return &current; }
 
 		BucketIterator& operator++() {
-			if (heap.empty()) return *this;
 
-			HeapElem elem = heap[0];
-			std::pop_heap(heap.begin(), heap.end()); heap.pop_back();
-
-			// the element on top of the heap has to have predecessor set
-			// so that predecessor would be valid upon dereferencing the iterator
-			// not only after increment
-			assert(predecessors.find(elem.bucket) != predecessors.end());
-
-			// use discovered edges only if we do not go only to first strict or non-strictly related
-			// bucket was found
-			if (! toFirstStrict || (elem.relation != Relation::LT && elem.relation != Relation::GT)) {
-
-				// add new distances to successors
-				if (goDown) {
-
-					for (EqualityBucket* lesserBucket : elem.bucket->lesser) {
-						HeapElem newElem(lesserBucket, elem.bucket, elem.distance + 1, Relation::LT);
-						updateHeap(lesserBucket, newElem);
-					}
-
-					for (EqualityBucket* lesserEqualBucket : elem.bucket->lesserEqual) {
-						Relation newRelation = elem.relation == Relation::LT ? Relation::LT : Relation::LE;
-						HeapElem newElem(lesserEqualBucket, elem.bucket, elem.distance + totalNodes, newRelation);
-						updateHeap(lesserEqualBucket, newElem);
-					}
-				} else {
-
-					for (EqualityBucket* parentBucket : elem.bucket->parents) {
-						HeapElem newElem;
-						if (contains(parentBucket->lesser, elem.bucket)) {
-							newElem = HeapElem(parentBucket, elem.bucket, elem.distance + 1, Relation::GT);
-						}
-						
-						else {
-							Relation newRelation = elem.relation == Relation::GT ? Relation::GT : Relation::GE;
-							newElem = HeapElem(parentBucket, elem.bucket, elem.distance + totalNodes, newRelation);
-						}
-
-						updateHeap(parentBucket, newElem);
-					}
-				}
+			if (inStrict && index >= strictlyRelated.size()) {
+				index = 0;
+				inStrict = false;
 			}
 
-			// remove already found buckets from queue so that next top would again be valid
-			while (! heap.empty() && predecessors.find(heap[0].bucket) != predecessors.end()) {
-				std::pop_heap(heap.begin(), heap.end());
-				heap.pop_back();
+			if (! inStrict && index >= nonStrictlyRelated.size()) {
+				current = RelatedBucket(nullptr, Relation::EQ);
+				return *this;
 			}
 
-			predecessors.emplace(heap[0].bucket, heap[0].predecessor);
+			if (inStrict)
+				current = RelatedBucket(strictlyRelated[index], goDown ? Relation::LT : Relation::GT);
+			else
+				current = RelatedBucket(nonStrictlyRelated[index], goDown ? Relation::LE : Relation::GE);
 
+			++index;
 			return *this;
-		}
-
-		void updateHeap(EqualityBucket* bucket, HeapElem& newElem) {
-			auto found = mapToElem.find(bucket);
-			if (found != mapToElem.end()) {
-				HeapElem& original = found->second;
-				if (original.distance > newElem.distance) {
-					swap(newElem, original);
-					std::make_heap(heap.begin(), heap.end());
-				}
-			} else {
-				mapToElem.emplace(bucket, newElem);
-				heap.emplace_back(newElem);
-				std::push_heap(heap.begin(), heap.end());
-			}
 		}
 
 		BucketIterator operator++(int) {
@@ -282,65 +321,95 @@ class EqualityBucket {
 			return preInc;
 		}
 
-		EqualityBucket* getPredecessor(EqualityBucket* bucket) const {
-			assert(bucket);
-			auto found = predecessors.find(bucket);
-			assert(found != predecessors.end());
-			return found->second;
+		std::vector<EqualityBucket*> getLesserEqualPath(EqualityBucket* bucket) const {
+			std::vector<EqualityBucket*> result;
+
+			BucketPtrSet visited;
+			std::stack<Frame> stack;
+
+			stack.emplace(start, start->lesserEqual.begin());
+			visited.emplace(start);
+
+			while (! stack.empty()) {
+				Frame frame = stack.top();
+				stack.pop();
+
+				// if we found the searched bucket, reconstruct the path and return
+				if (frame.bucket == bucket) {
+					std::vector<EqualityBucket*> result;
+					result.emplace_back(bucket);
+
+					while (! stack.empty()) {
+						frame = stack.top();
+						stack.pop();
+						result.emplace_back(frame.bucket);
+					}
+					return result;
+				}
+
+				if (frame.it == frame.bucket->lesserEqual.end()) continue;
+
+				// plan visit for the next successor
+				stack.emplace(frame.bucket, std::next(frame.it));
+
+				// plan visit to the current successor
+				if (visited.find(*frame.it) == visited.end()) {
+					visited.emplace(*frame.it);
+					stack.emplace(*frame.it, (*frame.it)->lesserEqual.begin());
+				}
+			}
+
+			assert(0 && "unreachable");
 		}
 	};
 
-	BucketIterator begin_down(unsigned totalNodes) {
-		return BucketIterator(this, totalNodes, true, false, true);
+	BucketIterator begin_down() {
+		return BucketIterator(this, true, false, true);
 	}
 
 	BucketIterator end_down() {
-		return BucketIterator(this, 0, true, false, false);
+		return BucketIterator(this, true, false, false);
 	}
 
-	BucketIterator begin_up(unsigned totalNodes) {
-		return BucketIterator(this, totalNodes, false, false, true);
+	BucketIterator begin_up() {
+		return BucketIterator(this, false, false, true);
 	}
 
 	BucketIterator end_up() {
-		return BucketIterator(this, 0, false, false, false);
+		return BucketIterator(this, false, false, false);
 	}
 
-	// iterates over bucets up to the first strictly lesser on each path
-	BucketIterator begin_strictDown(unsigned totalNodes) {
-		return BucketIterator(this, totalNodes, true, true, true);
+	// iterates over buckets up to the first strictly lesser on each path
+	BucketIterator begin_strictDown() {
+		return BucketIterator(this, true, true, true);
 	}
 
 	BucketIterator end_strictDown() {
-		return BucketIterator(this, 0, true, true, false);
+		return BucketIterator(this, true, true, false);
 	}
 
 	// iterates over buckets up to the first strictly greater on each path
-	BucketIterator begin_strictUp(unsigned totalNodes) {
-		return BucketIterator(this, totalNodes, false, true, true);
+	BucketIterator begin_strictUp() {
+		return BucketIterator(this, false, true, true);
 	}
 
 	BucketIterator end_strictUp() {
-		return BucketIterator(this, 0, false, true, false);
+		return BucketIterator(this, false, true, false);
 	}
 
 	std::pair<std::vector<EqualityBucket*>, bool> subtreeContains(
 			EqualityBucket* needle,
-			unsigned totalNodes,
 			bool ignoreLE) {
 
-		for (auto it = begin_down(totalNodes); it != end_down(); ++it) {
+		for (auto it = begin_down(); it != end_down(); ++it) {
 
 			if (it->bucket == needle) {
 				if (ignoreLE && it->relation != Relation::LT) break;
 				// else we found searched bucket
 
 				std::vector<EqualityBucket*> pathToThis;
-				EqualityBucket* current = needle;
-				do {
-					pathToThis.emplace_back(current);
-					current = it.getPredecessor(current);
-				} while (current);
+				
+				if (it->relation == Relation::LE) pathToThis = it.getLesserEqualPath(needle);
 
 				return { pathToThis, true };
 			}
@@ -397,10 +466,10 @@ class EqualityBucket {
 		substitueInSet<EqualityBucket*>(oldToNewPtr, parents);
 	}
 
-	std::vector<EqualityBucket*> getDirectlyRelated(unsigned totalNodes, bool goDown) {
+	std::vector<EqualityBucket*> getDirectlyRelated(bool goDown) {
 		std::vector<EqualityBucket*> result;
 
-		for (auto it = (goDown ? begin_strictDown(totalNodes) : begin_strictUp(totalNodes));
+		for (auto it = (goDown ? begin_strictDown() : begin_strictUp());
 				  it != (goDown ? end_strictDown() : end_strictUp());
 				  ++it) {
 
@@ -456,20 +525,19 @@ private:
 
 		enum Type { UP, DOWN, ALL, NONE };
 
-		unsigned totalNodes;
 		Type type = Type::NONE;
 		bool strictOnly = false;
 		EqualityBucket* start;
 		EqualityBucket::BucketIterator it;
 		unsigned index;
 		
-		ValueIterator(EqualityBucket* st, unsigned total, bool s, Type t, bool begin)
-		: totalNodes(total), type(t), strictOnly(s), start(st), index(0) {
+		ValueIterator(EqualityBucket* st, bool s, Type t, bool begin)
+		: type(t), strictOnly(s), start(st), index(0) {
 			if (begin) {
 				if (type == Type::DOWN || type == Type::ALL)
-					it = start->begin_down(totalNodes);
+					it = start->begin_down();
 				if (type == Type::UP)
-					it = start->begin_up(totalNodes);
+					it = start->begin_up();
 				toNextValidValue();
 			} else {
 				if (type == Type::DOWN)
@@ -513,7 +581,7 @@ private:
 			toNextValidValue();
 
 			if (it == start->end_down() && type == Type::ALL) {
-				it = ++(start->begin_up(totalNodes)); // ++ so that we would not pass equal again
+				it = ++(start->begin_up()); // ++ so that we would not pass equal again
 				toNextValidValue();
 			}
 
@@ -543,8 +611,8 @@ private:
 	bool hasComparativeRelations(EqualityBucket* bucket) const {
 		return bucket->getEqual().size() > 1
 			|| nonEqualities.find(bucket) != nonEqualities.end()
-			|| ++bucket->begin_down(buckets.size()) != bucket->end_down()
-			|| ++bucket->begin_up(buckets.size())   != bucket->end_up();
+			|| ++bucket->begin_down() != bucket->end_down()
+			|| ++bucket->begin_up()   != bucket->end_up();
 	}
 
 	bool hasComparativeRelationsOrLoads(EqualityBucket* bucket) const {
@@ -614,7 +682,7 @@ private:
 				result.emplace_back(otherBucket, otherBucket, Relation::EQ);
 			
 			// find unrelated comparative buckets
-			for (auto it = otherBucket->begin_down(buckets.size()); it != otherBucket->end_down(); ++it) {
+			for (auto it = otherBucket->begin_down(); it != otherBucket->end_down(); ++it) {
 
 				if (it->relation == Relation::EQ) continue; // already handled prior to loop
 
@@ -665,9 +733,9 @@ private:
 		// else handle lesserEqual specializing to equal
 		std::vector<EqualityBucket*> toMerge;
 		if (isLesserEqual(newBucketPtr, oldBucketPtr)) {
-			toMerge = oldBucketPtr->subtreeContains(newBucketPtr, buckets.size(), false).first;
+			toMerge = oldBucketPtr->subtreeContains(newBucketPtr, false).first;
 		} else {
-			toMerge = newBucketPtr->subtreeContains(oldBucketPtr, buckets.size(), false).first;
+			toMerge = newBucketPtr->subtreeContains(oldBucketPtr, false).first;
 		}
 
 		// unset unnecessary lesserEqual relations
@@ -837,21 +905,11 @@ private:
 	}
 
 	bool isLesser(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
-		if (rtEqBucket->subtreeContains(ltEqBucket, buckets.size(), true).second) return true;
-
-		C ltConst = getEqualConstant(ltEqBucket);
-		C rtBound = getLowerBound(rtEqBucket, true);
-
-		return ltConst && rtBound && ltConst->getValue().sle(rtBound->getValue());
+		return rtEqBucket->subtreeContains(ltEqBucket, true).second;
 	}
 
 	bool isLesserEqual(EqualityBucket* ltEqBucket, EqualityBucket* rtEqBucket) const {
-		if (rtEqBucket->subtreeContains(ltEqBucket, buckets.size(), false).second) return true;
-
-		C ltConst = getEqualConstant(ltEqBucket);
-		C rtBound = getLowerBound(rtEqBucket, false);
-
-		return ltConst && rtBound && ltConst->getValue().sle(rtBound->getValue());
+		return rtEqBucket->subtreeContains(ltEqBucket, false).second;
 	}
 
 	// in case of LOAD, rt is the from and lt is val
@@ -954,7 +1012,7 @@ private:
 	C getLowerBound(EqualityBucket* bucket, bool strict) const {
 
 		C highest = nullptr;
-		for (auto it = bucket->begin_down(buckets.size()); it != bucket->end_down(); ++it) {
+		for (auto it = bucket->begin_down(); it != bucket->end_down(); ++it) {
 			C constant = getEqualConstant(it->bucket);
 
 			if ((! strict || it->relation == Relation::LT) // ignore strict values if demanded
@@ -967,7 +1025,7 @@ private:
 	C getUpperBound(EqualityBucket* bucket, bool strict) const {
 
 		C lowest = nullptr;
-		for (auto it = bucket->begin_up(buckets.size()); it != bucket->end_up(); ++it) {
+		for (auto it = bucket->begin_up(); it != bucket->end_up(); ++it) {
 			C constant = getEqualConstant(it->bucket);
 
 			if ((! strict || it->relation == Relation::GT)
@@ -981,7 +1039,7 @@ private:
 		if (! inGraph(val)) return {};
 		EqualityBucket* bucketPtr = mapToBucket.at(val);
 
-		std::vector<EqualityBucket*> relatedBuckets = bucketPtr->getDirectlyRelated(buckets.size(), goDown);
+		std::vector<EqualityBucket*> relatedBuckets = bucketPtr->getDirectlyRelated(goDown);
 
 		std::vector<T> result;
 		for (EqualityBucket* bucketPtr : relatedBuckets) {
@@ -1102,10 +1160,44 @@ public:
 	void add(T val) {
 		if (mapToBucket.find(val) != mapToBucket.end()) return;
 
+		auto constVal = llvm::dyn_cast<llvm::ConstantInt>(val);
+		if (constVal) {
+			for (auto& bucketUniquePtr : buckets) {
+				EqualityBucket* otherBucket = bucketUniquePtr.get();
+				C constBucket = getEqualConstant(otherBucket);
+				if (! constBucket) continue;
+
+				int64_t newInt = constVal->getSExtValue();
+				int64_t oldInt = constBucket->getSExtValue();
+
+				if (newInt == oldInt) {
+					mapToBucket.emplace(val, otherBucket);
+					otherBucket->getEqual().emplace_back(val);
+					return;
+				}
+			}
+		}
+
+		// else added value will surely be in a bucket of its own
 		EqualityBucket* newBucketPtr = new EqualityBucket;
 		buckets.emplace_back(newBucketPtr);
 		mapToBucket.emplace(val, newBucketPtr);
-		newBucketPtr->getEqual().push_back(val);
+		newBucketPtr->getEqual().emplace_back(val);
+
+		if (! constVal) return;
+		// else add all relations to other constants
+
+		for (auto& bucketUniquePtr : buckets) {
+			EqualityBucket* otherBucket = bucketUniquePtr.get();
+			C constBucket = getEqualConstant(otherBucket);
+			if (! constBucket) continue;
+
+			int64_t newInt = constVal->getSExtValue();
+			int64_t oldInt = constBucket->getSExtValue();
+
+			if (newInt < oldInt) setLesser(newBucketPtr, otherBucket);
+			if (newInt > oldInt) setLesser(otherBucket, newBucketPtr);
+		}
 	}
 
 	// DANGER setEqual invalidates all EqualityBucket*
@@ -1392,44 +1484,44 @@ public:
 	}
 
 	ValueIterator begin_lesser(T val) const {
-		return ValueIterator(mapToBucket.at(val), buckets.size(), true, ValueIterator::Type::DOWN, true);
+		return ValueIterator(mapToBucket.at(val), true, ValueIterator::Type::DOWN, true);
 	}
 
 	ValueIterator end_lesser(T val) const {
-		return ValueIterator(mapToBucket.at(val), buckets.size(), true, ValueIterator::Type::DOWN, false);
+		return ValueIterator(mapToBucket.at(val), true, ValueIterator::Type::DOWN, false);
 	}
 
 	ValueIterator begin_lesserEqual(T val) const {
-		return ValueIterator(mapToBucket.at(val), buckets.size(), false, ValueIterator::Type::DOWN, true);
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::DOWN, true);
 	}
 
 	ValueIterator end_lesserEqual(T val) const {
-		return ValueIterator(mapToBucket.at(val), buckets.size(), false, ValueIterator::Type::DOWN, false);
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::DOWN, false);
 	}
 
 	ValueIterator begin_greater(T val) const {
-		return ValueIterator(mapToBucket.at(val), buckets.size(), true, ValueIterator::Type::UP, true);
+		return ValueIterator(mapToBucket.at(val), true, ValueIterator::Type::UP, true);
 	}
 
 	ValueIterator end_greater(T val) const {
-		return ValueIterator(mapToBucket.at(val), buckets.size(), true, ValueIterator::Type::UP, false);
+		return ValueIterator(mapToBucket.at(val), true, ValueIterator::Type::UP, false);
 	}
 
 	ValueIterator begin_greaterEqual(T val) const {
-		return ValueIterator(mapToBucket.at(val), buckets.size(), false, ValueIterator::Type::UP, true);
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::UP, true);
 	}
 
 	ValueIterator end_greaterEqual(T val) const {
-		return ValueIterator(mapToBucket.at(val), buckets.size(), false, ValueIterator::Type::UP, false);
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::UP, false);
 	}
 
 	ValueIterator begin_all(T val) const {
 		// TODO add non-equal values
-		return ValueIterator(mapToBucket.at(val), buckets.size(), false, ValueIterator::Type::ALL, true);
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::ALL, true);
 	}
 
 	ValueIterator end_all(T val) const {
-		return ValueIterator(mapToBucket.at(val), buckets.size(), false, ValueIterator::Type::ALL, false);
+		return ValueIterator(mapToBucket.at(val), false, ValueIterator::Type::ALL, false);
 	}
 
 	std::vector<T> getDirectlyLesser(T val) const {
@@ -1572,8 +1664,9 @@ public:
 		generalDump(std::cerr);
 	}
 
-	void ddump(EqualityBucket* bucket) {
-		dump(std::cerr, bucket);
+	void ddump(EqualityBucket* bucket, bool just = false) {
+		if (just) printVals(std::cerr, bucket);
+		else dump(std::cerr, bucket);
 	}
 
 	void ddump(const llvm::Value* val) {
