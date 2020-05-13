@@ -211,6 +211,50 @@ class RelationsAnalyzer {
         return allInvalid;
     }
 
+    bool mayHaveAlias(const llvm::User* val) const {
+        // if value is not pointer, we don't care whether there can be other name for same value
+        if (! val->getType()->isPointerTy()) return false;
+
+        for (const llvm::User* user : val->users()) {
+
+            // if value is stored, it can be accessed
+            if (llvm::isa<llvm::StoreInst>(user)) {
+                if (user->getOperand(0) == val) return true;
+
+            } else if (llvm::isa<llvm::CastInst>(user)) {
+                if (mayHaveAlias(user)) return true;
+
+            } else if (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(user)) {
+                if (gep->getPointerOperand() == val) {
+                    if (gep->hasAllZeroIndices()) return true;
+
+                    // TODO really? remove
+                    llvm::Type* valType = val->getType();
+                    llvm::Type* gepType = gep->getPointerOperandType();
+                    if (gepType->isVectorTy() || valType->isVectorTy())
+                        assert(0 && "i dont know what it is and when does it happen");
+                    if (gepType->getPrimitiveSizeInBits() < valType->getPrimitiveSizeInBits()) return true;
+                }
+
+            } else if (auto intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(user)) {
+                switch(intrinsic->getIntrinsicID()) {
+                    case llvm::Intrinsic::lifetime_start:
+                    case llvm::Intrinsic::lifetime_end:
+                    case llvm::Intrinsic::stacksave:
+                    case llvm::Intrinsic::stackrestore:
+                    case llvm::Intrinsic::dbg_declare:
+                    case llvm::Intrinsic::dbg_value:
+                        continue;
+                    default:
+                        if (intrinsic->mayWriteToMemory()) return true;
+                }
+            } else if (auto inst = llvm::dyn_cast<llvm::Instruction>(user)) {
+                if (inst->mayWriteToMemory()) return true;
+            }
+        }
+        return false;
+    }
+
     static const llvm::Value* stripCastsAndGEPs(const llvm::Value* memoryPtr) {
         memoryPtr = memoryPtr->stripPointerCasts();
         while (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(memoryPtr)) {
@@ -1031,51 +1075,6 @@ class RelationsAnalyzer {
         }
         return changed;
     }
-
-    bool mayHaveAlias(const llvm::User* val) const {
-        // if value is not pointer, we don't care whether there can be other name for same value
-        if (! val->getType()->isPointerTy()) return false;
-
-        for (const llvm::User* user : val->users()) {
-
-            // if value is stored, it can be accessed
-            if (llvm::isa<llvm::StoreInst>(user)) {
-                if (user->getOperand(0) == val) return true;
-
-            } else if (llvm::isa<llvm::CastInst>(user)) {
-                if (mayHaveAlias(user)) return true;
-
-            } else if (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(user)) {
-                if (gep->getPointerOperand() == val) {
-                    if (gep->hasAllZeroIndices()) return true;
-
-                    // TODO really? remove
-                    llvm::Type* valType = val->getType();
-                    llvm::Type* gepType = gep->getPointerOperandType();
-                    if (gepType->isVectorTy() || valType->isVectorTy())
-                        assert(0 && "i dont know what it is and when does it happen");
-                    if (gepType->getPrimitiveSizeInBits() < valType->getPrimitiveSizeInBits()) return true;
-                }
-
-            } else if (auto intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(user)) {
-                switch(intrinsic->getIntrinsicID()) {
-                    case llvm::Intrinsic::lifetime_start:
-                    case llvm::Intrinsic::lifetime_end:
-                    case llvm::Intrinsic::stacksave:
-                    case llvm::Intrinsic::stackrestore:
-                    case llvm::Intrinsic::dbg_declare:
-                    case llvm::Intrinsic::dbg_value:
-                        continue;
-                    default:
-                        if (intrinsic->mayWriteToMemory()) return true;
-                }
-            } else if (auto inst = llvm::dyn_cast<llvm::Instruction>(user)) {
-                if (inst->mayWriteToMemory()) return true;
-            }
-        }
-        return false;
-    }
-
 
 public:
     RelationsAnalyzer(const llvm::Module& m,
