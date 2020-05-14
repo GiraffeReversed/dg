@@ -128,41 +128,36 @@ class RelationsAnalyzer {
         if (llvm::isa<llvm::Constant>(store->getPointerOperand()))
             return unsetAll;
 
-        const llvm::Value* memoryPtr = stripCastsAndGEPs(store->getPointerOperand());
+        const llvm::Value* memoryPtr = store->getPointerOperand();
+        const llvm::Value* underlyingPtr = stripCastsAndGEPs(memoryPtr);
 
         std::set<std::pair<const llvm::Value*, unsigned>> writtenTo;
         // DANGER TODO unset everything in between too
-        addAndUnwrapLoads(writtenTo, memoryPtr); // unset underlying memory
-        addAndUnwrapLoads(writtenTo, store->getPointerOperand()); // unset pointer itself
-        
+        addAndUnwrapLoads(writtenTo, underlyingPtr); // unset underlying memory
+        addAndUnwrapLoads(writtenTo, memoryPtr); // unset pointer itself
 
         const ValueRelations& graph = locationMapping.at(store)->relations;
-        if (! equivToAlloca(graph.getEqual(memoryPtr))) {
-            // we can't tell, where the instruction writes to
-            //     except that it can't be memory, that surely has no alias
 
+        // every pointer with unknown origin is considered having an alias
+        if (mayHaveAlias(graph, memoryPtr) || ! hasKnownOrigin(graph, memoryPtr)) {
+
+            // if invalidated memory may have an alias, unset all memory whose
+            // origin is unknown since it may be the alias
             for (const auto& fromsValues : graph.getAllLoads()) {
-                for (const llvm::Value* from : fromsValues.first) {
-                    if (mayHaveAlias(llvm::cast<llvm::User>(from))) {
-                        addAndUnwrapLoads(writtenTo, from);
-                        break;
-                    } // else we may remember this load
+                if (! hasKnownOrigin(graph, fromsValues.first[0])) {
+                    addAndUnwrapLoads(writtenTo, fromsValues.first[0]);
                 }
             }
-            return writtenTo;
         }
 
-        // unset all loads whose origin is unknown and may have and alias
-        //   (since they may be aliases of written location)
-        for (const auto& fromsValues : graph.getAllLoads()) {
+        if (! hasKnownOrigin(graph, memoryPtr)) {
 
-            if (! equivToAlloca(fromsValues.first))
-                for (const llvm::Value* from : fromsValues.first) {
-                    if (mayHaveAlias(llvm::cast<llvm::User>(from))) {
-                        addAndUnwrapLoads(writtenTo, from);
-                        break;
-                    }
-                }
+            // if memory does not have a known origin, unset all values which
+            // may have an alias, since this memory may be the alias
+            for (const auto& fromsValues : graph.getAllLoads()) {
+                if (mayHaveAlias(graph, fromsValues.first[0]))
+                    addAndUnwrapLoads(writtenTo, fromsValues.first[0]);
+            }
         }
 
         return writtenTo;
@@ -209,6 +204,12 @@ class RelationsAnalyzer {
             if (directlyInvalid) allInvalid.emplace(directlyInvalid);
         }
         return allInvalid;
+    }
+
+    bool mayHaveAlias(const ValueRelations& graph, const llvm::Value* val) const {
+        for (auto val : graph.getEqual(val))
+            if (mayHaveAlias(llvm::cast<llvm::User>(val))) return true;
+        return false;
     }
 
     bool mayHaveAlias(const llvm::User* val) const {
@@ -263,8 +264,8 @@ class RelationsAnalyzer {
         return memoryPtr;
     }
 
-    static bool equivToAlloca(const std::vector<const llvm::Value*>& froms) {
-        for (auto memoryPtr : froms) {
+    static bool hasKnownOrigin(const ValueRelations& graph, const llvm::Value* from) {
+        for (auto memoryPtr : graph.getEqual(from)) {
             memoryPtr = stripCastsAndGEPs(memoryPtr);
             if (llvm::isa<llvm::AllocaInst>(memoryPtr)) return true;
         }
