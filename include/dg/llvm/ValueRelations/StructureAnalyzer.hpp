@@ -231,6 +231,8 @@ class StructureAnalyzer {
     std::map<const llvm::Function*, std::vector<CallRelation>> callRelationsMap;
 
     void categorizeEdges() {
+        std::set<VRLocation*> found;
+
         for (auto& function : module) {
             if (function.isDeclaration()) continue;
 
@@ -240,7 +242,6 @@ class StructureAnalyzer {
             VRLocation* first = vrblockOfEntry->first();
 
             std::vector<std::pair<VRLocation*, int>> stack;
-            std::set<VRLocation*> found;
 
             stack.emplace_back(first, 0);
             found.emplace(first);
@@ -279,7 +280,7 @@ class StructureAnalyzer {
                     continue;
                 }
 
-                // plan visit to successor
+                // else the successor has not been found yet, plan a visit
                 stack.emplace_back(successor, 0);
                 found.emplace(successor);
                 succEdge->type = EdgeType::TREE;
