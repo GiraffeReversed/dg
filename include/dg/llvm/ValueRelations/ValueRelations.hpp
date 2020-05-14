@@ -1392,12 +1392,18 @@ public:
 
 		if (! inGraph(rt)) {
 			C constBound = getUpperBound(mapToBucket.at(lt), true);
-			return constBound && constRt && constBound->getSExtValue() <= constRt->getSExtValue();
+			if (constBound && constRt && constBound->getSExtValue() <= constRt->getSExtValue())
+				return true;
+			constBound = getUpperBound(mapToBucket.at(lt), false);
+			return constBound && constRt && constBound->getSExtValue() < constRt->getSExtValue();
 		}
 
 		if (! inGraph(lt)) {
 			C constBound = getLowerBound(mapToBucket.at(rt), true);
-			return constLt && constBound && constLt->getSExtValue() <= constBound->getSExtValue();
+			if (constLt && constBound && constLt->getSExtValue() <= constBound->getSExtValue())
+				return true;
+			constBound = getLowerBound(mapToBucket.at(rt), false);
+			return constLt && constBound && constLt->getSExtValue() < constBound->getSExtValue();
 		}
 
 		assert (inGraph(lt) && inGraph(rt));
