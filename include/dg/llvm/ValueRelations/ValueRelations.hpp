@@ -1141,6 +1141,7 @@ public:
 						}
 						add(val);
 						setEqual(thisRelatedBucket, mapToBucket.at(val));
+						thisRelatedBucket = getCorrespondingBucketOrNew(other, otherRelatedBucket);
 					}
 					break;
 				case Relation::NE: setNonEqual(thisRelatedBucket, thisBucket); break;
