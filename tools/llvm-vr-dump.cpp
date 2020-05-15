@@ -142,7 +142,7 @@ int main(int argc, char *argv[])
                         llvm::Type* usedType = ptrType->getElementType();
                         unsigned size = llvm::DataLayout(M).getTypeAllocSize(usedType);
                         const llvm::Value* llvmSize = llvm::ConstantInt::get(usedType, size);
-                        std::cerr << vr.isValidPointer(inst, llvmSize) << std::endl;
+                        std::cout << vr.isValidPointer(inst, llvmSize) << std::endl;
                     }
                 }
             }
