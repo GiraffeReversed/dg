@@ -1154,12 +1154,13 @@ public:
                   const StructureAnalyzer& sa)
                   : module(m), locationMapping(locs), blockMapping(blcs), structure(sa) {}
 
-    void analyze(unsigned maxPass) {
+    unsigned analyze(unsigned maxPass) {
 
         bool changed = true;
         unsigned passNum = 0;
         while (changed && ++passNum <= maxPass)
             changed = analysisPass();
+        return passNum;
     }
 };
 
