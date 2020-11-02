@@ -1128,6 +1128,9 @@ class RelationsAnalyzer {
             auto& vrblockPtr = pair.second;
 
             for (auto& locationPtr : vrblockPtr->locations) {
+                //std::cerr << "LOCATION " << locationPtr->id << std::endl;
+                //for (VREdge* predEdge : locationPtr->predecessors) 
+                //    std::cerr << predEdge->op->toStr() << std::endl;
 
                 if (locationPtr->predecessors.size() > 1) {
                     changed = mergeRelations(locationPtr.get())
@@ -1137,6 +1140,7 @@ class RelationsAnalyzer {
                     VREdge* edge = locationPtr->predecessors[0];
                     changed |= processOperation(edge->source, edge->target, edge->op.get());
                 } // else no predecessors => nothing to be passed
+                //locationPtr->relations.ddump();
             }
         }
         return changed;
