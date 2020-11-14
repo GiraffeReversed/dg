@@ -1,4 +1,5 @@
 SV_PATH="/home/anna/formela/sv-benchmarks/c"
+VR_DUMP_PATH="/home/anna/formela/symbiotic/dg/build/tools/"
 
 UTHASH="uthash_JEN_test3-2 uthash_FNV_test2-2 uthash_FNV_test3-2 uthash_FNV_test10-3 uthash_OAT_test1-1 uthash_SFH_test5-2 uthash_FNV_test4-3 uthash_BER_test5-2 uthash_SFH_test10-3 uthash_SFH_test5-3 uthash_OAT_test10-1 uthash_SFH_test2-1 uthash_BER_test10-3 uthash_OAT_test1-2 uthash_SAX_test1-2 uthash_BER_test4-1 uthash_BER_test1-2 uthash_FNV_test2-1 uthash_BER_test5-1 uthash_BER_test4-3 uthash_SFH_test9-2 uthash_OAT_test7-2 uthash_SFH_test5-1 uthash_FNV_test1-1 uthash_JEN_test4-3 uthash_BER_test6-2 uthash_OAT_test4-1 uthash_SAX_test4-1 uthash_JEN_test6-2 uthash_JEN_test10-2 uthash_SFH_test6-2 uthash_SAX_test3-1 uthash_SAX_test7-1 uthash_BER_test1-1 uthash_SFH_test10-1 uthash_JEN_test8-1 uthash_BER_test10-2 uthash_BER_test8-1 uthash_JEN_test7-1 uthash_SAX_test4-2 uthash_BER_test10-1 uthash_SAX_test6-2 uthash_SAX_test9-1 uthash_SAX_test4-3 uthash_SFH_test3-1 uthash_FNV_test5-1 uthash_FNV_test7-1 uthash_SFH_test3-2 uthash_OAT_test6-1 uthash_OAT_test8-2 uthash_SAX_test2-2 uthash_OAT_test7-1 uthash_SAX_test8-2 uthash_SFH_test6-1 uthash_BER_test7-1 uthash_JEN_test10-3 uthash_SAX_test5-2 uthash_SFH_test8-2 uthash_JEN_test5-3 uthash_JEN_test4-1 uthash_BER_test6-1 uthash_OAT_test9-1 uthash_OAT_test4-3 uthash_OAT_test10-3 uthash_SFH_test7-1 uthash_OAT_test2-1 uthash_JEN_test9-2 uthash_BER_test3-2 uthash_OAT_test3-1 uthash_OAT_test8-1 uthash_OAT_test10-2 uthash_SAX_test1-1 uthash_SAX_test7-2 uthash_FNV_test8-2 uthash_SFH_test8-1 uthash_JEN_test1-2 uthash_JEN_test1-1 uthash_SAX_test10-1 uthash_FNV_test9-2 uthash_OAT_test3-2 uthash_SFH_test2-2 uthash_FNV_test10-1 uthash_BER_test7-2 uthash_FNV_test1-2 uthash_JEN_test2-2 uthash_OAT_test5-3 uthash_BER_test9-2 uthash_SFH_test7-2 uthash_FNV_test5-3 uthash_JEN_test5-2 uthash_OAT_test5-1 uthash_BER_test5-3 uthash_OAT_test6-2 uthash_FNV_test7-2 uthash_SAX_test3-2 uthash_OAT_test5-2 uthash_JEN_test9-1 uthash_BER_test2-2 uthash_FNV_test4-2 uthash_OAT_test2-2 uthash_SAX_test5-1 uthash_JEN_test7-2 uthash_SFH_test10-2 uthash_JEN_test4-2 uthash_FNV_test9-1 uthash_SAX_test9-2 uthash_FNV_test6-1 uthash_SAX_test10-2 uthash_FNV_test3-1 uthash_FNV_test8-1 uthash_FNV_test6-2 uthash_SFH_test1-1 uthash_JEN_test3-1 uthash_OAT_test4-2 uthash_SAX_test8-1 uthash_JEN_test2-1 uthash_BER_test2-1 uthash_BER_test4-2 uthash_FNV_test5-2 uthash_JEN_test6-1 uthash_SAX_test10-3 uthash_SFH_test9-1 uthash_BER_test8-2 uthash_SAX_test2-1 uthash_BER_test3-1 uthash_SFH_test4-3 uthash_SFH_test4-1 uthash_FNV_test10-2 uthash_SAX_test6-1 uthash_JEN_test5-1 uthash_OAT_test9-2 uthash_JEN_test10-1 uthash_BER_test9-1 uthash_JEN_test8-2 uthash_SFH_test4-2 uthash_FNV_test4-1 uthash_SAX_test5-3 uthash_SFH_test1-2"
 OVERFLOW="PrefixIncrement \
@@ -503,7 +504,7 @@ for item in $UTHASH; do
     echo $item
     echo $item >> log.txt
     clang -c -emit-llvm ${SV_PATH}/uthash-2.0.2/$item.c
-    tools/llvm-vr-dump $item.bc >> log.txt 2>&1
+    $VR_DUMP_PATH/llvm-vr-dump $item.bc 2>&1 | tee -a log.txt
     rm $item.bc
 done;
 
@@ -511,7 +512,7 @@ for item in $OVERFLOW; do
     echo $item
     echo $item >> log.txt
     clang -c -emit-llvm ${SV_PATH}/signedintegeroverflow-regression/$item.c
-    tools/llvm-vr-dump $item.bc >> log.txt 2>&1
+    $VR_DUMP_PATH/llvm-vr-dump $item.bc 2>&1 | tee -a log.txt
     rm $item.bc
 done;
 
@@ -519,6 +520,6 @@ for item in $SOFTWARE; do
     echo $item
     echo $item >> log.txt
     clang -c -emit-llvm ${SV_PATH}/ldv-challenges/$item.c
-    tools/llvm-vr-dump $item.bc >> log.txt 2>&1
+    $VR_DUMP_PATH/llvm-vr-dump $item.bc 2>&1 | tee -a log.txt
     rm $item.bc
 done;
