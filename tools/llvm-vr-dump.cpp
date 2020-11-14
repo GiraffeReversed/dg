@@ -44,6 +44,7 @@
 #include "dg/llvm/ValueRelations/GraphBuilder.h"
 #include "dg/llvm/ValueRelations/StructureAnalyzer.h"
 #include "dg/llvm/ValueRelations/RelationsAnalyzer.h"
+#include "dg/llvm/ValueRelations/AnalysisGraph.h"
 #include "dg/llvm/ValueRelations/getValName.h"
 
 #include "dg/tools/TimeMeasure.h"
@@ -103,14 +104,25 @@ int main(int argc, char *argv[])
 
     RelationsAnalyzer ra(*M, locationMapping, blockMapping, structure);
     unsigned num_iter = ra.analyze(max_iter);
-    // call to analyzeAfterRelationsAnalysis is unnecessary
-    // end analysis
+
+    structure.analyzeAfterRelationsAnalysis();
 
     tm.stop();
     tm.report("INFO: Value Relations analysis took");
     std::cerr << "INFO: The analysis made " << num_iter << " passes." << std::endl;
-
     std::cerr << std::endl;
+
+    AnalysisGraph analysis(locationMapping, structure);
+
+    for (const auto& instrLoc : locationMapping) {
+        const llvm::Instruction* instr = instrLoc.first;
+        if (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(instr)) {
+            const llvm::Value* size = llvm::ConstantInt::get(
+                    llvm::Type::getInt32Ty(M->getContext()),
+                    gep->getResultElementType()->getPrimitiveSizeInBits() / 8);
+            std::cerr << analysis.isValidPointer(gep, size) << std::endl;
+        }
+    }
 
     if (todot) {
         std::cout << "digraph VR {\n";
