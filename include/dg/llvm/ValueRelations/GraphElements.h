@@ -172,6 +172,10 @@ struct VRLocation  {
         connect(std::unique_ptr<VREdge>(new VREdge(this, target, op)));
     }
 
+    void connect(VRLocation& target, VROp* op) {
+        connect(&target, op);
+    }
+
     std::vector<VREdge *> getPredecessors() {
         return predecessors;
     }
@@ -259,21 +263,21 @@ struct VRCodeGraph {
         return block;
     }
 
-    VRLocation* newVRLocation(VRBBlockHandle vrblock) {
+    VRLocation& newVRLocation(VRBBlockHandle vrblock) {
         vrblocks[vrblock].emplace_back(++totalLocations);
         return vrblocks[vrblock].back();
     }
 
-    VRLocation* newVRLocation(VRBBlockHandle vrblock, const llvm::Instruction* inst) {
+    VRLocation& newVRLocation(VRBBlockHandle vrblock, const llvm::Instruction* inst) {
         assert(locationMapping.find(inst) == locationMapping.end());
 
-        VRLocation* loc = newVRLocation(vrblock);
-        locationMapping.emplace(inst, loc);
+        VRLocation& loc = newVRLocation(vrblock);
+        locationMapping.emplace(inst, &loc);
         return loc;
     }
 
-    void setEntryLocation(const llvm::Function* f, VRLocation* loc) {
-        functionMapping.emplace(f, loc);
+    void setEntryLocation(const llvm::Function* f, VRLocation& loc) {
+        functionMapping.emplace(f, &loc);
     }
 
 public:
@@ -285,20 +289,19 @@ public:
         return vrblocks[getVRBBlockHandle(b)];
     }
 
-    VRLocation* getVRLocation(const llvm::Instruction* ptr) const {
-        return locationMapping.at(ptr);
+    VRLocation& getVRLocation(const llvm::Instruction* ptr) const {
+        return *locationMapping.at(ptr);
     }
 
-    VRLocation* getEntryLocation(const llvm::Function* f) const {
-        return functionMapping.at(f);
+    VRLocation& getEntryLocation(const llvm::Function* f) const {
+        return *functionMapping.at(f);
     }
 
     struct VRCodeGraphIterator {
-        using value_type = VRLocation*;
+        using value_type = VRLocation;
         using difference_type = uint64_t;
-        using reference = value_type;//&;
-        //using pointer = value_type*;
-        using pointer = const std::unique_ptr<VRLocation>*;
+        using reference = value_type&;
+        using pointer = value_type*;
         using iterator_category = std::forward_iterator_tag;
 
         VRCodeGraphIterator() = default;
@@ -307,16 +310,8 @@ public:
             toLocation(begin ? toBlock->begin() : toBlock->end())
         {}
 
-        //VRCodeGraphIterator(
-        //    typename std::vector<VRBBlock>::const_iterator b,
-        //    typename VRBBlock::iterator l
-        //): toBlock(b), toLocation(l) {}
-
-        //reference operator*() const { return *toLocation; }
-        //pointer operator->() const { return &operator*(); }
         reference operator*() const { return *toLocation; }
-        pointer operator->() const { return toLocation.operator->(); }
-
+        pointer operator->() const { return &operator*(); }
 
         friend bool operator==(const VRCodeGraphIterator& lt, const VRCodeGraphIterator& rt) {
             return lt.toLocation == rt.toLocation;
@@ -351,11 +346,9 @@ public:
     using iterator = VRCodeGraphIterator;
 
     iterator begin() const {
-        //return vrblocks.empty() ? iterator() : iterator(vrblocks.begin(), vrblocks.begin()->begin());
         return vrblocks.empty() ? iterator() : iterator(vrblocks, true);
     }
     iterator end() const {
-        //return vrblocks.empty() ? iterator() : iterator(std::prev(vrblocks.end()), std::prev(vrblocks.end())->end());
         return vrblocks.empty() ? iterator() : iterator(vrblocks, false);
     }
 };
