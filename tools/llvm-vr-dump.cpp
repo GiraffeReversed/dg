@@ -93,16 +93,15 @@ int main(int argc, char *argv[])
     tm.start();
 
     // perform preparations and analysis
-    std::map<const llvm::Instruction*, VRLocation*> locationMapping;
-    std::map<const llvm::BasicBlock*, std::unique_ptr<VRBBlock>> blockMapping;
+    VRCodeGraph codeGraph;
 
-    GraphBuilder gb(*M, locationMapping, blockMapping);
+    GraphBuilder gb(*M, codeGraph);
     gb.build();
 
-    StructureAnalyzer structure(*M, locationMapping, blockMapping);
+    StructureAnalyzer structure(*M, codeGraph);
     structure.analyzeBeforeRelationsAnalysis();
 
-    RelationsAnalyzer ra(*M, locationMapping, blockMapping, structure);
+    RelationsAnalyzer ra(*M, codeGraph, structure);
     unsigned num_iter = ra.analyze(max_iter);
 
     structure.analyzeAfterRelationsAnalysis();
@@ -112,44 +111,51 @@ int main(int argc, char *argv[])
     std::cerr << "INFO: The analysis made " << num_iter << " passes." << std::endl;
     std::cerr << std::endl;
 
-    AnalysisGraph analysis(locationMapping, structure);
+    AnalysisGraph analysis(codeGraph, structure);
 
-    for (const auto& instrLoc : locationMapping) {
-        const llvm::Instruction* instr = instrLoc.first;
-        if (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(instr)) {
-            const llvm::Value* size = llvm::ConstantInt::get(
-                    llvm::Type::getInt32Ty(M->getContext()),
-                    gep->getResultElementType()->getPrimitiveSizeInBits() / 8);
-            std::cerr << analysis.isValidPointer(gep, size) << std::endl;
+
+    for (auto& function : *M) {
+        for (auto & block : function) {
+            for (auto& inst : block) {
+                if (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(&inst)) {
+                    const llvm::Value* size = llvm::ConstantInt::get(
+                            llvm::Type::getInt32Ty(M->getContext()),
+                            gep->getResultElementType()->getPrimitiveSizeInBits() / 8);
+                    std::cerr << analysis.isValidPointer(gep, size) << std::endl;
+                }
+            }
         }
     }
 
     if (todot) {
         std::cout << "digraph VR {\n";
-        for (const auto& block : blockMapping) {
-            for (const auto& loc : block.second->locations) {
-                std::cout << "  NODE" << loc->id;
-                std::cout << "[label=\"";
-                std::cout << "LOCATION " << loc->id << "\\n";
-                loc->relations.dump();
-                std::cout << "\"];\n";
-            }
+        for (auto& loc : codeGraph) {
+            std::cout << "  NODE" << loc.id;
+            std::cout << "[label=\"";
+            std::cout << "LOCATION " << loc.id << "\\n";
+            loc.relations.dump();
+            std::cout << "\"];\n";
         }
 
         unsigned dummyIndex = 0;
-        for (const auto& block : blockMapping) {
-            for (const auto& loc : block.second->locations) {
-                for (const auto& succ : loc->successors) {
-                    if (succ->target)
-                        std::cout << "  NODE" << loc->id << " -> NODE" << succ->target->id;
-                    else {
-                        std::cout << "DUMMY_NODE" << ++dummyIndex << std::endl;
-                        std::cout << "  NODE" << loc->id << " -> DUMMY_NODE" << dummyIndex;
-                    }
-                    std::cout << " [label=\"";
-                    succ->op->dump();
-                    std::cout << "\"];\n";
+        for (auto& loc : codeGraph) {
+            for (const auto& succ : loc.successors) {
+                if (succ->target)
+                    std::cout << "  NODE" << loc.id << " -> NODE" << succ->target->id;
+                else {
+                    std::cout << "DUMMY_NODE" << ++dummyIndex << std::endl;
+                    std::cout << "  NODE" << loc.id << " -> DUMMY_NODE" << dummyIndex;
                 }
+                std::cout << " [label=\"";
+                succ->op->dump();
+                std::cout << "\", color=";
+                switch (succ->type) {
+                    case EdgeType::TREE: std::cout << "darkgreen"; break;
+                    case EdgeType::FORWARD: std::cout << "blue"; break;
+                    case EdgeType::BACK: std::cout << "red"; break;
+                    case EdgeType::DEFAULT: std::cout << "pink"; break;
+                }
+                std::cout << "];\n";
             }
         }
         std::cout << "}\n";
