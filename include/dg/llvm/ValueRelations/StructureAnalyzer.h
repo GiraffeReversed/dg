@@ -753,8 +753,8 @@ public:
     }
 
     // assumes that location is valid loop start (join of tree and back edges)
-    const std::vector<const llvm::Instruction*>& getInloopValues(VRLocation* const location) const {
-        return inloopValues.at(location);
+    const std::vector<const llvm::Instruction*>& getInloopValues(VRLocation& location) const {
+        return inloopValues.at(&location);
     }
 
     const std::set<const llvm::Instruction*>& getInstructionSetFor(unsigned opcode) const {
