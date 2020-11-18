@@ -1120,10 +1120,11 @@ class RelationsAnalyzer {
         return true;
     }
 
-    bool analysisPass() {
+    bool passFunction(const llvm::Function* function) {
         bool changed = false;
 
-        for (auto& location : codeGraph) {
+        for (auto it = codeGraph.begin(function); it != codeGraph.end(function); ++it) {
+            VRLocation& location = *it;
             //std::cerr << "LOCATION " << location.id << std::endl;
             //for (VREdge* predEdge : location.predecessors)
             //    std::cerr << predEdge->op->toStr() << std::endl;
@@ -1149,11 +1150,21 @@ public:
 
     unsigned analyze(unsigned maxPass) {
 
-        bool changed = true;
-        unsigned passNum = 0;
-        while (changed && ++passNum <= maxPass)
-            changed = analysisPass();
-        return passNum;
+        unsigned maxExecutedPass = 0;
+
+        for (auto& function : module) {
+            if (function.isDeclaration())
+                continue;
+
+            bool changed = true;
+            unsigned passNum = 0;
+            while (changed && ++passNum <= maxPass)
+                changed = passFunction(&function);
+            
+            maxExecutedPass = std::max(maxExecutedPass, passNum);
+        }
+
+        return maxExecutedPass;
     }
 };
 
