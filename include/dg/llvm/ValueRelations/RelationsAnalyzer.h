@@ -43,10 +43,7 @@ class RelationsAnalyzer {
     const std::set<std::string> safeFunctions = { "__VERIFIER_nondet_int", "__VERIFIER_nondet_char" };
 
     const llvm::Module& module;
-
-    // VRLocation corresponding to the state of the program BEFORE executing the instruction
-    const std::map<const llvm::Instruction *, VRLocation *>& locationMapping;
-    const std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blockMapping;
+    const VRCodeGraph& codeGraph;
 
     // holds information about structural properties of analyzed module
     // like set of instructions executed in loop starging at given location
@@ -128,7 +125,7 @@ class RelationsAnalyzer {
         addAndUnwrapLoads(writtenTo, underlyingPtr); // unset underlying memory
         addAndUnwrapLoads(writtenTo, memoryPtr); // unset pointer itself
 
-        const ValueRelations& graph = locationMapping.at(store)->relations;
+        const ValueRelations& graph = codeGraph.getVRLocation(store).relations;
 
         // every pointer with unknown origin is considered having an alias
         if (mayHaveAlias(graph, memoryPtr) || !hasKnownOrigin(graph, memoryPtr)) {
@@ -678,10 +675,11 @@ class RelationsAnalyzer {
             }
         }
         assert (assumedPred);
+        assert (assumedPred->size() > 1);
+        const llvm::Instruction& lastBeforeTerminator = *std::prev(std::prev(assumedPred->end()));
 
-        VRBBlock* vrbblock = blockMapping.at(assumedPred).get();
-        VRLocation* source = vrbblock->last();
-        bool result = newGraph.merge(source->relations);
+        VRLocation& source = codeGraph.getVRLocation(&lastBeforeTerminator);
+        bool result = newGraph.merge(source.relations);
         assert(result);
     }
 
@@ -721,15 +719,15 @@ class RelationsAnalyzer {
         return true;
     }
 
-    bool mergeRelations(VRLocation* location) {
-        return mergeRelations(location->getPredLocations(), location);
+    bool mergeRelations(VRLocation& location) {
+        return mergeRelations(location.getPredLocations(), location);
     }
 
-    bool mergeRelations(const std::vector<VRLocation*>& preds, VRLocation* location) {
+    bool mergeRelations(const std::vector<VRLocation*>& preds, VRLocation& location) {
         if (preds.empty())
             return false;
 
-        ValueRelations newGraph = location->relations;
+        ValueRelations newGraph = location.relations;
         ValueRelations& oldGraph = preds[0]->relations;
         std::vector<const llvm::Value*> values = oldGraph.getAllValues();
 
@@ -775,15 +773,15 @@ class RelationsAnalyzer {
         }
 
         // merge relations from tree predecessor only
-        VRLocation* treePred = getTreePred(location);
-        const ValueRelations& treePredGraph = treePred->relations;
+        VRLocation& treePred = getTreePred(location);
+        const ValueRelations& treePredGraph = treePred.relations;
 
-        if (location->isJustLoopJoin()) {
+        if (location.isJustLoopJoin()) {
             bool result = newGraph.merge(treePredGraph, true);
             assert(result);
         }
 
-        return andSwapIfChanged(location->relations, newGraph);
+        return andSwapIfChanged(location.relations, newGraph);
     }
 
     bool loadsInAll(const std::vector<VRLocation*>& locations, const llvm::Value* from, const llvm::Value* value) const {
@@ -803,15 +801,15 @@ class RelationsAnalyzer {
         return true;
     }
 
-    bool mergeLoads(VRLocation* location) {
-        return mergeLoads(location->getPredLocations(), location);
+    bool mergeLoads(VRLocation& location) {
+        return mergeLoads(location.getPredLocations(), location);
     }
 
-    bool mergeLoads(const std::vector<VRLocation*>& preds, VRLocation* location) {
+    bool mergeLoads(const std::vector<VRLocation*>& preds, VRLocation& location) {
         if (preds.empty())
             return false;
 
-        ValueRelations newGraph = location->relations;
+        ValueRelations newGraph = location.relations;
         const auto& loadBucketPairs = preds[0]->relations.getAllLoads();
 
         // merge loads from all predecessors
@@ -826,9 +824,9 @@ class RelationsAnalyzer {
 
         // merge loads from outloop predecessor, that are not invalidated
         // inside the loop
-        if (location->isJustLoopJoin()) {
+        if (location.isJustLoopJoin()) {
 
-            const ValueRelations& oldGraph = getTreePred(location)->relations;
+            const ValueRelations& oldGraph = getTreePred(location).relations;
 
             std::set<const llvm::Value*> allInvalid;
 
@@ -848,17 +846,17 @@ class RelationsAnalyzer {
             }
         }
 
-        return andSwapIfChanged(location->relations, newGraph);
+        return andSwapIfChanged(location.relations, newGraph);
     }
 
-    VRLocation* getTreePred(VRLocation* location) const {
+    VRLocation& getTreePred(VRLocation& location) const {
         VRLocation* treePred = nullptr;
-        for (VREdge* predEdge : location->predecessors) {
+        for (VREdge* predEdge : location.predecessors) {
             if (predEdge->type == EdgeType::TREE)
                 treePred = predEdge->source;
         }
         assert(treePred);
-        return treePred;
+        return *treePred;
     }
 
     bool hasConflictLoad(const std::vector<VRLocation*>& preds,
@@ -885,12 +883,12 @@ class RelationsAnalyzer {
         return false;
     }
 
-    bool mergeRelationsByLoads(VRLocation* location) {
-        return mergeRelationsByLoads(location->getPredLocations(), location);
+    bool mergeRelationsByLoads(VRLocation& location) {
+        return mergeRelationsByLoads(location.getPredLocations(), location);
     }
 
-    bool mergeRelationsByLoads(const std::vector<VRLocation*>& preds, VRLocation* location) {
-        ValueRelations newGraph = location->relations;
+    bool mergeRelationsByLoads(const std::vector<VRLocation*>& preds, VRLocation& location) {
+        ValueRelations newGraph = location.relations;
 
         std::vector<const llvm::Value*> froms;
         for (auto fromsValues : preds[0]->relations.getAllLoads()) {
@@ -901,21 +899,21 @@ class RelationsAnalyzer {
         }
 
         // infer some invariants in loop
-        if (preds.size() == 2 && location->isJustLoopJoin()
+        if (preds.size() == 2 && location.isJustLoopJoin()
                 && preds[0]->relations.holdsAnyRelations()
                 && preds[1]->relations.holdsAnyRelations())
             inferChangeInLoop(newGraph, froms, location);
 
         inferFromChangeLocations(newGraph, location);
 
-        return andSwapIfChanged(location->relations, newGraph);
+        return andSwapIfChanged(location.relations, newGraph);
     }
 
     void inferChangeInLoop(ValueRelations& newGraph,
                            const std::vector<const llvm::Value*>& froms,
-                           VRLocation* location) {
+                           VRLocation& location) {
         for (const llvm::Value* from : froms) {
-            const auto& predEdges = location->predecessors;
+            const auto& predEdges = location.predecessors;
 
             VRLocation* outloopPred = predEdges[0]->type == EdgeType::BACK ?
                                         predEdges[1]->source : predEdges[0]->source;
@@ -937,7 +935,7 @@ class RelationsAnalyzer {
             const llvm::Value* firstLoadInLoop = nullptr;
             for (const auto* val : structure.getInloopValues(location)) {
 
-                const ValueRelations& relations = locationMapping.at(val)->relations;
+                const ValueRelations& relations = codeGraph.getVRLocation(val).relations;
                 auto invalidated = instructionInvalidatesFromGraph(relations, val);
                 if (invalidated.find(from) != invalidated.end())
                     break;
@@ -983,21 +981,21 @@ class RelationsAnalyzer {
         }
     }
 
-    void inferFromChangeLocations(ValueRelations& newGraph, VRLocation* location) {
-        if (location->isJustLoopJoin()) {
-            VRLocation* treePred = getTreePred(location);
+    void inferFromChangeLocations(ValueRelations& newGraph, VRLocation& location) {
+        if (location.isJustLoopJoin()) {
+            VRLocation& treePred = getTreePred(location);
 
-            for (auto fromsValues : treePred->relations.getAllLoads()) {
+            for (auto fromsValues : treePred.relations.getAllLoads()) {
                 for (const llvm::Value* from : fromsValues.first) {
-                    std::vector<VRLocation*> locationsAfterInvalidating = { treePred };
+                    std::vector<VRLocation*> locationsAfterInvalidating = { &treePred };
 
                     // get all locations which influence value loaded from from
                     for (const llvm::Instruction* invalidating : structure.getInloopValues(location)) {
-                        const ValueRelations& relations = locationMapping.at(invalidating)->relations;
+                        const ValueRelations& relations = codeGraph.getVRLocation(invalidating).relations;
                         auto invalidated = instructionInvalidatesFromGraph(relations, invalidating);
 
                         if (invalidated.find(from) != invalidated.end()) {
-                            locationsAfterInvalidating.emplace_back(locationMapping.at(invalidating)->getSuccLocations()[0]);
+                            locationsAfterInvalidating.emplace_back(codeGraph.getVRLocation(invalidating).getSuccLocations()[0]);
                         }
                     }
 
@@ -1125,34 +1123,29 @@ class RelationsAnalyzer {
     bool analysisPass() {
         bool changed = false;
 
-        for (auto& pair : blockMapping) {
-            auto& vrblockPtr = pair.second;
+        for (auto& location : codeGraph) {
+            //std::cerr << "LOCATION " << location.id << std::endl;
+            //for (VREdge* predEdge : location.predecessors)
+            //    std::cerr << predEdge->op->toStr() << std::endl;
 
-            for (auto& locationPtr : vrblockPtr->locations) {
-                //std::cerr << "LOCATION " << locationPtr->id << std::endl;
-                //for (VREdge* predEdge : locationPtr->predecessors) 
-                //    std::cerr << predEdge->op->toStr() << std::endl;
-
-                if (locationPtr->predecessors.size() > 1) {
-                    changed = mergeRelations(locationPtr.get())
-                            | mergeLoads(locationPtr.get())
-                            | mergeRelationsByLoads(locationPtr.get());
-                } else if (locationPtr->predecessors.size() == 1) {
-                    VREdge* edge = locationPtr->predecessors[0];
-                    changed |= processOperation(edge->source, edge->target, edge->op.get());
-                } // else no predecessors => nothing to be passed
-                //locationPtr->relations.ddump();
-            }
+            if (location.predecessors.size() > 1) {
+                changed = mergeRelations(location)
+                        | mergeLoads(location)
+                        | mergeRelationsByLoads(location);
+            } else if (location.predecessors.size() == 1) {
+                VREdge* edge = location.predecessors[0];
+                changed |= processOperation(edge->source, edge->target, edge->op.get());
+            } // else no predecessors => nothing to be passed
+            //location.relations.ddump();
         }
         return changed;
     }
 
 public:
     RelationsAnalyzer(const llvm::Module& m,
-                  std::map<const llvm::Instruction *, VRLocation *>& locs,
-                  std::map<const llvm::BasicBlock *, std::unique_ptr<VRBBlock>>& blcs,
+                  const VRCodeGraph& g,
                   const StructureAnalyzer& sa)
-                  : module(m), locationMapping(locs), blockMapping(blcs), structure(sa) {}
+                  : module(m), codeGraph(g), structure(sa) {}
 
     unsigned analyze(unsigned maxPass) {
 
