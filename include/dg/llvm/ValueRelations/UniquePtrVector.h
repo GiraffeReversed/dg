@@ -23,7 +23,7 @@ public:
             using reference = value_type&;
             using pointer = value_type*;
             using difference_type = typename ContainerIterator::difference_type;
-            using iterator_category = std::forward_iterator_tag; 
+            using iterator_category = std::bidirectional_iterator_tag;//std::forward_iterator_tag; 
 
             iterator() = default;
             iterator(ContainerIterator i): it(i) {}
@@ -47,6 +47,17 @@ public:
             iterator operator++(int) {
                 auto copy = *this;
                 ++*this;
+                return copy;
+            }
+
+            iterator& operator--() {
+                --it;
+                return *this;
+            }
+
+            iterator operator--(int) {
+                auto copy = *this;
+                --*this;
                 return copy;
             }
             
