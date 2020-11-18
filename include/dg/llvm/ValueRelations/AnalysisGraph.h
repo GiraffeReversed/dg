@@ -16,9 +16,7 @@ namespace vr {
 
 class AnalysisGraph {
 
-    // VRLocation corresponding to the state of the program BEFORE executing the instruction
-    std::map<const llvm::Instruction *, VRLocation *>& locationMapping;
-
+    const VRCodeGraph& codeGraph;
     StructureAnalyzer structure;
 
     std::pair<const llvm::Value*, const llvm::Type*> getOnlyNonzeroIndex(const llvm::GetElementPtrInst* gep) const {
@@ -142,7 +140,7 @@ public:
         auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(ptr);
         if (! gep) return "unknown";
 
-        const ValueRelations& relations = locationMapping.at(gep)->relations;
+        const ValueRelations& relations = codeGraph.getVRLocation(gep).relations;
         const std::vector<CallRelation>& callRelations = structure.getCallRelationsFor(gep);
 
         if (callRelations.empty())
@@ -181,9 +179,9 @@ public:
         return "true";
     }
 
-    AnalysisGraph(std::map<const llvm::Instruction*, VRLocation*>& lm,
+    AnalysisGraph(const VRCodeGraph& g,
                   const StructureAnalyzer& s)
-            : locationMapping(lm), structure(s) {}
+            : codeGraph(g), structure(s) {}
 };
 
 } // namespace vr
