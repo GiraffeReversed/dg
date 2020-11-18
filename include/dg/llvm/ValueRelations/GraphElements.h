@@ -237,9 +237,9 @@ struct VRLocation  {
 #endif
 };
 
-struct VRCodeGraph {
+class VRCodeGraph {
 
-    friend struct GB;
+    friend struct GraphBuilder;
 
     UniquePtrVector<VRLocation> locations;
     std::map<const llvm::Function*, VRLocation*> functionMapping;
