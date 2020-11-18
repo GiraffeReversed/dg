@@ -275,6 +275,10 @@ public:
         return *functionMapping.at(f);
     }
 
+    void hasCategorizedEdges() {
+        categorizedEdges = true;
+    }
+
     struct VRFunctionIterator {
 
         VRFunctionIterator() = default;
