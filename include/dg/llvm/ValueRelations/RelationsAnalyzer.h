@@ -754,6 +754,8 @@ class RelationsAnalyzer {
                                 values.erase(found);
                                 valueIt = std::find(values.begin(), values.end(), val);
                             }
+                        } else if (relatesInAll(preds, related, val, &ValueRelations::isLesserEqual)) {
+                            newGraph.setLesserEqual(related, val);
                         }
                         break;
 
