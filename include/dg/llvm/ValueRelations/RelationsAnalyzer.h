@@ -1125,7 +1125,7 @@ class RelationsAnalyzer {
     bool passFunction(const llvm::Function* function) {
         bool changed = false;
 
-        for (auto it = codeGraph.begin(function); it != codeGraph.end(function); ++it) {
+        for (auto it = codeGraph.bfs_begin(function); it != codeGraph.bfs_end(function); ++it) {
             VRLocation& location = *it;
             //std::cerr << "LOCATION " << location.id << std::endl;
             //for (VREdge* predEdge : location.predecessors)
