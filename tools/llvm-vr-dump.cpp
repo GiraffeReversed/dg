@@ -118,10 +118,14 @@ int main(int argc, char *argv[])
         for (auto & block : function) {
             for (auto& inst : block) {
                 if (auto gep = llvm::dyn_cast<llvm::GetElementPtrInst>(&inst)) {
-                    const llvm::Value* size = llvm::ConstantInt::get(
+
+                    uint64_t size = gep->getResultElementType()->getPrimitiveSizeInBits() / 8;
+                    if (size == 0) continue;
+
+                    const llvm::Value* sizeVal = llvm::ConstantInt::get(
                             llvm::Type::getInt32Ty(M->getContext()),
-                            gep->getResultElementType()->getPrimitiveSizeInBits() / 8);
-                    std::cerr << analysis.isValidPointer(gep, size) << std::endl;
+                            size);
+                    std::cerr << analysis.isValidPointer(gep, sizeVal) << std::endl;
                 }
             }
         }
@@ -153,7 +157,7 @@ int main(int argc, char *argv[])
                     case EdgeType::TREE: std::cout << "darkgreen"; break;
                     case EdgeType::FORWARD: std::cout << "blue"; break;
                     case EdgeType::BACK: std::cout << "red"; break;
-                    case EdgeType::DEFAULT: std::cout << "pink"; break;
+                    case EdgeType::DEFAULT: std::cout << "magenta"; break;
                 }
                 std::cout << "];\n";
             }
