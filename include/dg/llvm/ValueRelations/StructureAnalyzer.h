@@ -225,69 +225,49 @@ class StructureAnalyzer {
     std::map<const llvm::Function*, std::vector<CallRelation>> callRelationsMap;
 
     void categorizeEdges() {
-        std::set<VRLocation*> found;
-
         for (auto& function : module) {
             if (function.isDeclaration())
                 continue;
 
-            VRLocation& first = codeGraph.getEntryLocation(&function);
+            for (auto it = codeGraph.dfs_begin(&function); it != codeGraph.dfs_end(&function); ++it) {
+                VRLocation& current = *it;
+                VREdge* predEdge = it.getEdge();
 
-            std::vector<std::pair<VRLocation*, int>> stack;
+                if (predEdge)
+                    predEdge->type = EdgeType::TREE;
+                
+                for (auto* succEdge : current.getSuccessors()) {
+                    VRLocation* successor = succEdge->target;
 
-            stack.emplace_back(&first, 0);
-            found.emplace(&first);
+                    if (! successor)
+                        succEdge->type = EdgeType::TREE;
+                    else if (it.wasVisited(successor)) {
 
-            VRLocation* current;
-            unsigned succIndex;
-            while (!stack.empty()) {
-                std::tie(current, succIndex) = stack.back();
-                stack.pop_back();
-
-                // check if there is next successor
-                if (current->successors.size() <= succIndex)
-                    continue;
-
-                VREdge* succEdge = current->getSuccessors()[succIndex];
-                VRLocation* successor = succEdge->target;
-
-                // if there is, plan return
-                stack.emplace_back(current, ++succIndex);
-
-                if (!successor) {
-                    succEdge->type = EdgeType::TREE;
-                    continue;
+                        if (it.onStack(successor))
+                            succEdge->type = EdgeType::BACK;
+                        else
+                            succEdge->type = EdgeType::FORWARD;
+                    }
                 }
-
-                // if successor was already searched, we can at least categorize the edge
-                if (found.find(successor) != found.end()) {
-                    std::vector<VRLocation*> mockStack;
-                    for (auto& locIndex : stack)
-                        mockStack.push_back(locIndex.first);
-
-                    if (std::find(mockStack.begin(), mockStack.end(), successor) != mockStack.end()) // TODO find_if
-                        succEdge->type = EdgeType::BACK;
-                    else
-                        succEdge->type = EdgeType::FORWARD;
-                    continue;
-                }
-
-                // else the successor has not been found yet, plan a visit
-                stack.emplace_back(successor, 0);
-                found.emplace(successor);
-                succEdge->type = EdgeType::TREE;
             }
-
         }
 
         codeGraph.hasCategorizedEdges();
     }
 
     void findLoops() {
-        for (auto& location : codeGraph) {
-            std::vector<VREdge*>& predEdges = location.predecessors;
-            if (location.isJustLoopJoin()) {
+        for (auto& function : module) {
+            if (function.isDeclaration())
+                continue;
 
+            for (auto it = codeGraph.bfs_begin(&function); it != codeGraph.bfs_end(&function); ++it) {
+                VRLocation& location = *it;
+
+                if (!location.isJustLoopJoin())
+                    continue;
+
+                std::vector<VREdge*>& predEdges = location.predecessors;
+                
                 // remove the incoming tree edge, so that backwardReach would
                 // really go only backwards
                 VREdge* treePred = nullptr;
@@ -300,8 +280,8 @@ class StructureAnalyzer {
                 }
                 assert(treePred); // every join has to have exactly one tree predecessor
                 
-                auto forwardReach = genericReach(location, true);
-                auto backwardReach = genericReach(location, false);
+                auto forwardReach = collectReachableEdges(&function, location, true);
+                auto backwardReach = collectReachableEdges(&function, location, false);
 
                 // put the tree edge back in
                 predEdges.emplace_back(treePred);
@@ -323,28 +303,14 @@ class StructureAnalyzer {
         }
     }
 
-    std::vector<VREdge*> genericReach(VRLocation& from, bool goForward) {
-        std::set<VRLocation*> found = { &from };
-        std::list<VRLocation*> toVisit = { &from };
+    std::vector<VREdge*> collectReachableEdges(const llvm::Function* f, VRLocation& from, bool goForward) {
 
         std::vector<VREdge*> result;
-        while (!toVisit.empty()) {
-            VRLocation* current = toVisit.front();
-            toVisit.pop_front();
-
-            auto nextEdges = goForward ? current->getSuccessors() : current->getPredecessors();
-            for (VREdge* nextEdge : nextEdges) {
-                if (!nextEdge->target)
-                    continue;
-
-                result.emplace_back(nextEdge);
-
-                auto nextLocation = goForward ? nextEdge->target : nextEdge->source;
-                if (found.find(nextLocation) == found.end()) {
-                    found.insert(nextLocation);
-                    toVisit.push_back(nextLocation);
-                }
-            }
+        for (auto it = goForward ? codeGraph.bfs_begin(f, from) : codeGraph.backward_bfs_begin(f, from);
+             it != (goForward ? codeGraph.bfs_end(f, from) : codeGraph.backward_bfs_end(f, from));
+             ++it) {
+            if (VREdge* edge = it.getEdge())
+                result.emplace_back(edge);
         }
         return result;
     }
